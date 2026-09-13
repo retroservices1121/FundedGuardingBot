@@ -114,12 +114,18 @@ export class Database {
   }
 
   async disconnect(telegramId: number) {
-    await this.pool.query("BEGIN");
+    const client = await this.pool.connect();
     try {
-      await this.pool.query(`DELETE FROM mfp_connections WHERE telegram_id=$1`, [telegramId]);
-      await this.pool.query(`UPDATE users SET selected_account_id=NULL, onboarding_state=NULL WHERE telegram_id=$1`, [telegramId]);
-      await this.pool.query("COMMIT");
-    } catch (error) { await this.pool.query("ROLLBACK"); throw error; }
+      await client.query("BEGIN");
+      await client.query(`DELETE FROM mfp_connections WHERE telegram_id=$1`, [telegramId]);
+      await client.query(`UPDATE users SET selected_account_id=NULL, onboarding_state=NULL WHERE telegram_id=$1`, [telegramId]);
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 
   setSelectedAccount(telegramId: number, accountId: string) {
