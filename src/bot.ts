@@ -192,7 +192,7 @@ export function createGuardianBot(config: Config, db: Database) {
       const { account, client } = await selectedAccount(ctx);
       const position = (await client.listClosedPositions(account.id, 10))[Number(ctx.match[1])];
       if (!position) throw new Error("That closed position is no longer in the recent list. Refresh and try again.");
-      const image = await createClosedPositionShareCard(position);
+      const image = await createClosedPositionShareCard(position, ctx.me.username);
       const symbol = (position.symbol || position.coin).replace(/[^A-Za-z0-9_-]/g, "");
       await ctx.replyWithPhoto(new InputFile(image, `funded-guardian-${symbol}-${position.id}.png`), {
         caption: closedPositionCaption(position, ctx.me.username),

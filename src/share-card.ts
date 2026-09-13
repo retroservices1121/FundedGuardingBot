@@ -4,6 +4,13 @@ import type { Position } from "./types.js";
 
 const WIDTH = 1200;
 const HEIGHT = 675;
+const FONT = "DejaVu Sans, sans-serif";
+
+const ASSET_NAMES: Record<string, string> = {
+  BTC: "Bitcoin", ETH: "Ethereum", SOL: "Solana", XRP: "XRP",
+  DOGE: "Dogecoin", BNB: "BNB", ADA: "Cardano", AVAX: "Avalanche",
+  LINK: "Chainlink", LTC: "Litecoin",
+};
 
 function escapeXml(value: unknown) {
   return String(value ?? "").replace(/[&<>"']/g, (character) => ({
@@ -11,80 +18,123 @@ function escapeXml(value: unknown) {
   })[character]!);
 }
 
-function currency(value?: number | null) {
+function currency(value?: number | null, showPlus = false) {
   if (value === undefined || value === null || !Number.isFinite(value)) return "N/A";
-  return value.toLocaleString("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 2 });
+  const formatted = Math.abs(value).toLocaleString("en-US", {
+    style: "currency", currency: "USD", minimumFractionDigits: 2, maximumFractionDigits: 2,
+  });
+  if (value < 0) return `-${formatted}`;
+  return showPlus ? `+${formatted}` : formatted;
 }
 
-function closedDate(timestamp?: number | null) {
-  if (!timestamp) return "DATE UNAVAILABLE";
-  const milliseconds = timestamp < 10_000_000_000 ? timestamp * 1000 : timestamp;
-  return new Date(milliseconds).toLocaleDateString("en-US", {
-    timeZone: "UTC", year: "numeric", month: "short", day: "numeric",
-  }).toUpperCase();
+function normalizedTimestamp(timestamp?: number | null) {
+  if (!timestamp) return 0;
+  return timestamp < 10_000_000_000 ? timestamp * 1000 : timestamp;
+}
+
+function duration(openedAt?: number | null, closedAt?: number | null) {
+  const seconds = Math.max(0, Math.round((normalizedTimestamp(closedAt) - normalizedTimestamp(openedAt)) / 1000));
+  if (!seconds || !Number.isFinite(seconds)) return "N/A";
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const remainder = seconds % 60;
+  return hours ? `${hours}H ${minutes}M` : `${minutes}M ${remainder}S`;
+}
+
+function returnPercent(position: Position) {
+  if (!position.entry_price || !position.exit_price) return "N/A";
+  const direction = position.side === "long" ? 1 : -1;
+  const result = ((position.exit_price - position.entry_price) / position.entry_price)
+    * direction * Math.max(position.leverage || 1, 1) * 100;
+  return `${result >= 0 ? "+" : ""}${result.toFixed(2)}%`;
+}
+
+function cleanSymbol(position: Position) {
+  return (position.symbol || position.coin || "PERP")
+    .toUpperCase()
+    .replace(/[-_/]?(USDT|USDC|USD|PERP)$/i, "");
 }
 
 export function closedPositionCaption(position: Position, botUsername?: string) {
-  const symbol = position.symbol || position.coin;
+  const symbol = cleanSymbol(position);
   const direction = position.side.toUpperCase();
-  const pnl = currency(position.realized_pnl);
+  const pnl = currency(position.realized_pnl, true);
   const bot = botUsername ? `\n\nCreated with @${botUsername}` : "";
   return `${symbol} ${direction} closed · ${pnl} realized P&L${bot}\n\n#FundedGuardian #TradingDiscipline`;
 }
 
-export async function createClosedPositionShareCard(position: Position) {
+export async function createClosedPositionShareCard(position: Position, botUsername?: string) {
   const pnl = position.realized_pnl ?? 0;
   const positive = pnl >= 0;
-  const accent = positive ? "#00f26f" : "#ff4d67";
-  const resultLabel = positive ? "PROFIT" : "LOSS";
-  const symbol = escapeXml(position.symbol || position.coin);
-  const direction = escapeXml(position.side.toUpperCase());
+  const accent = positive ? "#35d39a" : "#ff5572";
+  const symbol = cleanSymbol(position);
+  const assetName = ASSET_NAMES[symbol] ?? symbol;
+  const direction = position.side.toUpperCase();
+  const username = escapeXml(botUsername ? `@${botUsername.replace(/^@/, "")}` : "@FundedGuardianBot");
   const logoPath = path.join(process.cwd(), "assets", "funded-guardian-logo.png");
-  const logo = await sharp(logoPath).resize(88, 88, { fit: "contain" }).png().toBuffer();
+  const logo = await sharp(logoPath).resize(58, 58, { fit: "contain" }).png().toBuffer();
+
   const svg = `
     <svg width="${WIDTH}" height="${HEIGHT}" viewBox="0 0 ${WIDTH} ${HEIGHT}" xmlns="http://www.w3.org/2000/svg">
       <defs>
-        <linearGradient id="wash" x1="0" y1="0" x2="1" y2="1">
-          <stop offset="0%" stop-color="#f7f9f6"/>
-          <stop offset="100%" stop-color="#edf2ed"/>
+        <linearGradient id="panel" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0%" stop-color="#080b0a"/>
+          <stop offset="100%" stop-color="#030504"/>
         </linearGradient>
+        <linearGradient id="ribbon" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0%" stop-color="#111815"/>
+          <stop offset="48%" stop-color="#315345"/>
+          <stop offset="55%" stop-color="#0d1411"/>
+          <stop offset="100%" stop-color="#030504"/>
+        </linearGradient>
+        <radialGradient id="halo" cx="72%" cy="48%" r="58%">
+          <stop offset="0%" stop-color="${accent}" stop-opacity="0.13"/>
+          <stop offset="100%" stop-color="${accent}" stop-opacity="0"/>
+        </radialGradient>
+        <clipPath id="rightClip"><rect x="700" width="500" height="675"/></clipPath>
       </defs>
-      <rect width="1200" height="675" fill="url(#wash)"/>
-      <rect x="34" y="34" width="1132" height="607" rx="28" fill="#ffffff"/>
-      <rect x="34" y="34" width="10" height="607" rx="5" fill="#12d96b"/>
 
-      <rect x="76" y="66" width="88" height="88" rx="20" fill="#070a09"/>
-      <text x="190" y="101" fill="#111512" font-family="DejaVu Sans, sans-serif" font-size="25" font-weight="700">Funded Guardian</text>
-      <text x="190" y="134" fill="#7b847e" font-family="DejaVu Sans, sans-serif" font-size="17">Closed trade receipt</text>
-      <text x="1122" y="102" text-anchor="end" fill="#111512" font-family="DejaVu Sans, sans-serif" font-size="19" font-weight="700">${escapeXml(closedDate(position.closed_at))}</text>
-      <text x="1122" y="132" text-anchor="end" fill="#89918c" font-family="DejaVu Sans, sans-serif" font-size="15">MYFUNDEDPERPS</text>
-      <line x1="76" y1="181" x2="1122" y2="181" stroke="#e4e8e4" stroke-width="2"/>
+      <rect width="1200" height="675" fill="url(#panel)"/>
+      <rect width="1200" height="675" fill="url(#halo)"/>
 
-      <text x="76" y="240" fill="#8a938d" font-family="DejaVu Sans, sans-serif" font-size="17" font-weight="700" letter-spacing="2">${resultLabel}</text>
-      <text x="76" y="338" fill="${accent}" font-family="DejaVu Sans, sans-serif" font-size="86" font-weight="700">${escapeXml(currency(position.realized_pnl))}</text>
+      <g clip-path="url(#rightClip)" fill="none" stroke-linecap="round">
+        <path d="M1190 -90 C860 60 840 190 1145 300 C1360 378 1250 570 820 760" stroke="url(#ribbon)" stroke-width="130"/>
+        <path d="M1190 -90 C860 60 840 190 1145 300 C1360 378 1250 570 820 760" stroke="${accent}" stroke-opacity="0.27" stroke-width="3"/>
+        <path d="M860 -80 C1110 80 1112 190 850 310 C660 398 770 545 1110 720" stroke="url(#ribbon)" stroke-width="94"/>
+        <path d="M860 -80 C1110 80 1112 190 850 310 C660 398 770 545 1110 720" stroke="${accent}" stroke-opacity="0.2" stroke-width="3"/>
+      </g>
 
-      <text x="1122" y="252" text-anchor="end" fill="#111512" font-family="DejaVu Sans, sans-serif" font-size="54" font-weight="700">${symbol}</text>
-      <rect x="899" y="278" width="112" height="42" rx="21" fill="${accent}"/>
-      <text x="955" y="306" text-anchor="middle" fill="#071009" font-family="DejaVu Sans, sans-serif" font-size="18" font-weight="700">${direction}</text>
-      <text x="1122" y="306" text-anchor="end" fill="#667069" font-family="DejaVu Sans, sans-serif" font-size="18">${escapeXml(position.leverage)}x ${escapeXml(position.margin_mode.toUpperCase())}</text>
+      <rect x="42" y="34" width="58" height="58" rx="14" fill="#050807"/>
+      <text x="118" y="72" fill="#ffffff" font-family="${FONT}" font-size="25" font-weight="700">Funded Guardian</text>
 
-      <rect x="76" y="388" width="1046" height="132" rx="18" fill="#f4f6f3"/>
-      <line x1="424" y1="412" x2="424" y2="496" stroke="#dce2dc" stroke-width="2"/>
-      <line x1="772" y1="412" x2="772" y2="496" stroke="#dce2dc" stroke-width="2"/>
-      <text x="108" y="430" fill="#7b847e" font-family="DejaVu Sans, sans-serif" font-size="15" font-weight="700">ENTRY PRICE</text>
-      <text x="108" y="476" fill="#111512" font-family="DejaVu Sans, sans-serif" font-size="27" font-weight="700">${escapeXml(currency(position.entry_price))}</text>
-      <text x="456" y="430" fill="#7b847e" font-family="DejaVu Sans, sans-serif" font-size="15" font-weight="700">EXIT PRICE</text>
-      <text x="456" y="476" fill="#111512" font-family="DejaVu Sans, sans-serif" font-size="27" font-weight="700">${escapeXml(currency(position.exit_price))}</text>
-      <text x="804" y="430" fill="#7b847e" font-family="DejaVu Sans, sans-serif" font-size="15" font-weight="700">POSITION SIZE</text>
-      <text x="804" y="476" fill="#111512" font-family="DejaVu Sans, sans-serif" font-size="27" font-weight="700">${escapeXml(position.size)} ${symbol}</text>
+      <rect x="1010" y="35" width="148" height="50" rx="25" fill="#111513" stroke="#2d332f" stroke-width="2"/>
+      <text x="1084" y="67" text-anchor="middle" fill="#d4d8d5" font-family="${FONT}" font-size="18" font-weight="700">${escapeXml(direction)} ${escapeXml(position.leverage)}x</text>
 
-      <text x="76" y="580" fill="#7b847e" font-family="DejaVu Sans, sans-serif" font-size="17">Fees  <tspan fill="#242a26" font-weight="700">${escapeXml(currency(position.fees))}</tspan></text>
-      <text x="300" y="580" fill="#7b847e" font-family="DejaVu Sans, sans-serif" font-size="17">Funding  <tspan fill="#242a26" font-weight="700">${escapeXml(currency(position.funding))}</tspan></text>
-      <text x="1122" y="580" text-anchor="end" fill="#7b847e" font-family="DejaVu Sans, sans-serif" font-size="17">Built for disciplined trading</text>
+      <text x="42" y="196" fill="#ffffff" font-family="${FONT}" font-size="56" font-weight="700">${escapeXml(assetName)}</text>
+      <text x="42" y="235" fill="#808783" font-family="${FONT}" font-size="24" font-weight="700">$${escapeXml(symbol)}</text>
+
+      <rect x="42" y="267" width="610" height="140" fill="${accent}"/>
+      <text x="74" y="365" fill="#030504" font-family="${FONT}" font-size="82" font-weight="700">${escapeXml(currency(position.realized_pnl, true))}</text>
+
+      <text x="42" y="468" fill="#777e7a" font-family="${FONT}" font-size="18" font-weight="700">RETURN</text>
+      <text x="420" y="468" text-anchor="end" fill="${accent}" font-family="${FONT}" font-size="20" font-weight="700">${escapeXml(returnPercent(position))}</text>
+      <text x="42" y="506" fill="#777e7a" font-family="${FONT}" font-size="18" font-weight="700">ENTRY</text>
+      <text x="420" y="506" text-anchor="end" fill="#ffffff" font-family="${FONT}" font-size="20" font-weight="700">${escapeXml(currency(position.entry_price))}</text>
+      <text x="42" y="544" fill="#777e7a" font-family="${FONT}" font-size="18" font-weight="700">EXIT</text>
+      <text x="420" y="544" text-anchor="end" fill="#ffffff" font-family="${FONT}" font-size="20" font-weight="700">${escapeXml(currency(position.exit_price))}</text>
+      <text x="42" y="582" fill="#777e7a" font-family="${FONT}" font-size="18" font-weight="700">DURATION</text>
+      <text x="420" y="582" text-anchor="end" fill="#ffffff" font-family="${FONT}" font-size="20" font-weight="700">${escapeXml(duration(position.opened_at, position.closed_at))}</text>
+
+      <circle cx="70" cy="629" r="24" fill="#101512" stroke="${accent}" stroke-width="2"/>
+      <text x="70" y="637" text-anchor="middle" fill="${accent}" font-family="${FONT}" font-size="21" font-weight="700">FG</text>
+      <text x="108" y="625" fill="#ffffff" font-family="${FONT}" font-size="21" font-weight="700">${username}</text>
+      <text x="108" y="649" fill="#757c78" font-family="${FONT}" font-size="14">Trade within the rules.</text>
+
+      <text x="1158" y="630" text-anchor="end" fill="#68706b" font-family="${FONT}" font-size="14">Fees ${escapeXml(currency(position.fees))}  ·  Funding ${escapeXml(currency(position.funding))}</text>
     </svg>`;
 
   return sharp(Buffer.from(svg))
-    .composite([{ input: logo, left: 76, top: 66 }])
+    .composite([{ input: logo, left: 42, top: 34 }])
     .png({ compressionLevel: 9 })
     .toBuffer();
 }
