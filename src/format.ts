@@ -1,5 +1,5 @@
 import { InlineKeyboard } from "grammy";
-import type { ChallengeAccount, PositionView, TradeTicket } from "./types.js";
+import type { ChallengeAccount, Position, PositionView, TradeTicket } from "./types.js";
 import { accountRisk } from "./risk.js";
 
 export const money = (value: unknown) =>
@@ -74,4 +74,32 @@ export function positionsMessage(positions: PositionView[]) {
   });
   const footer = positions.length > visible.length ? `\n\nShowing 10 of ${positions.length} positions.` : "";
   return `📈 Open Positions (${positions.length})\n\n${sections.join("\n\n")}${footer}`;
+}
+
+function positionDate(timestamp?: number | null) {
+  if (!timestamp) return "Unavailable";
+  const milliseconds = timestamp < 10_000_000_000 ? timestamp * 1000 : timestamp;
+  return new Date(milliseconds).toLocaleString("en-US", {
+    timeZone: "UTC", month: "short", day: "numeric", hour: "numeric", minute: "2-digit",
+  }) + " UTC";
+}
+
+export function closedPositionsMessage(positions: Position[]) {
+  if (!positions.length) return "📭 No closed positions on the selected account.";
+  const sections = positions.slice(0, 10).map((position) => {
+    const direction = position.side === "long" ? "LONG" : "SHORT";
+    const pnl = position.realized_pnl ?? undefined;
+    const icon = pnl === undefined ? "⚪️" : pnl >= 0 ? "🟢" : "🔴";
+    return [
+      `${icon} ${direction} · ${position.symbol || position.coin}`,
+      `Size: ${position.size} · ${position.leverage}× ${position.margin_mode}`,
+      `Entry: ${money(position.entry_price)}`,
+      `Exit: ${money(position.exit_price)}`,
+      `Realized P&L: ${money(pnl)}`,
+      `Total fees: ${money(position.fees)}`,
+      `Funding: ${money(position.funding)}`,
+      `Closed: ${positionDate(position.closed_at)}`,
+    ].join("\n");
+  });
+  return `📕 Recent Closed Positions\n\n${sections.join("\n\n")}`;
 }

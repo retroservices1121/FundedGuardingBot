@@ -3,7 +3,7 @@ import { Bot, Context, InlineKeyboard } from "grammy";
 import type { Config } from "./config.js";
 import { SecretBox } from "./crypto.js";
 import { Database, type UserProfile } from "./db.js";
-import { accountMessage, positionsMessage, ticketMessage, tradeKeyboard } from "./format.js";
+import { accountMessage, closedPositionsMessage, positionsMessage, ticketMessage, tradeKeyboard } from "./format.js";
 import { MfpClient, MfpError } from "./mfp.js";
 import { buildTicket, calculateSize, guardAccount } from "./risk.js";
 import type { Market, PositionView, Side } from "./types.js";
@@ -67,7 +67,7 @@ export function createGuardianBot(config: Config, db: Database) {
   async function showStatus(ctx: Context) {
     const { account, connection } = await selectedAccount(ctx);
     await ctx.reply(accountMessage(account, connection.environment, config.DRY_RUN), {
-      reply_markup: new InlineKeyboard().text("Trade", "trade").text("Open Positions", "positions").row().text("Refresh", "status").text("Accounts", "accounts").row().text("Settings", "settings").text("Lock Today", "lock"),
+      reply_markup: new InlineKeyboard().text("Trade", "trade").text("Open Positions", "positions").row().text("Closed Positions", "closed").text("Refresh", "status").row().text("Accounts", "accounts").text("Settings", "settings").row().text("Lock Today", "lock"),
     });
   }
 
@@ -84,7 +84,7 @@ export function createGuardianBot(config: Config, db: Database) {
     const user = await ensureUser(ctx);
     const connection = await db.getConnection(user.telegramId);
     const keyboard = connection
-      ? new InlineKeyboard().text("Account Status", "status").text("Open Positions", "positions").row().text("Trade", "trade").text("Settings", "settings").row().text("Accounts", "accounts")
+      ? new InlineKeyboard().text("Account Status", "status").text("Open Positions", "positions").row().text("Closed Positions", "closed").text("Trade", "trade").row().text("Settings", "settings").text("Accounts", "accounts")
       : new InlineKeyboard().text("Connect MyFundedPerps", "connect");
     await ctx.reply(connection
       ? `🛡 Welcome back to Funded Guardian.\n\nConnected: ${connection.environment} key ••••${connection.keyLastFour}`
@@ -163,11 +163,21 @@ export function createGuardianBot(config: Config, db: Database) {
       };
     });
     await ctx.reply(positionsMessage(views), {
-      reply_markup: new InlineKeyboard().text("Refresh", "positions").text("Trade", "trade").row().text("Account Status", "status"),
+      reply_markup: new InlineKeyboard().text("Refresh", "positions").text("Closed Positions", "closed").row().text("Trade", "trade").text("Account Status", "status"),
     });
   }
   bot.command("positions", async (ctx) => { try { await showPositions(ctx); } catch (error) { await ctx.reply(`❌ ${apiError(error)}`); } });
   bot.callbackQuery("positions", async (ctx) => { await ctx.answerCallbackQuery(); try { await showPositions(ctx); } catch (error) { await ctx.reply(`❌ ${apiError(error)}`); } });
+
+  async function showClosedPositions(ctx: Context) {
+    const { account, client } = await selectedAccount(ctx);
+    const positions = await client.listClosedPositions(account.id, 10);
+    await ctx.reply(closedPositionsMessage(positions), {
+      reply_markup: new InlineKeyboard().text("Refresh", "closed").text("Open Positions", "positions").row().text("Trade", "trade").text("Account Status", "status"),
+    });
+  }
+  bot.command("closed", async (ctx) => { try { await showClosedPositions(ctx); } catch (error) { await ctx.reply(`❌ ${apiError(error)}`); } });
+  bot.callbackQuery("closed", async (ctx) => { await ctx.answerCallbackQuery(); try { await showClosedPositions(ctx); } catch (error) { await ctx.reply(`❌ ${apiError(error)}`); } });
   bot.command("accounts", async (ctx) => { try { await showAccounts(ctx); } catch (error) { await ctx.reply(`❌ ${apiError(error)}`); } });
   bot.callbackQuery("accounts", async (ctx) => { await ctx.answerCallbackQuery(); try { await showAccounts(ctx); } catch (error) { await ctx.reply(`❌ ${apiError(error)}`); } });
   bot.callbackQuery(/^account:(\d+)$/, async (ctx) => {

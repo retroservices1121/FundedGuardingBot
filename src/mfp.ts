@@ -133,6 +133,11 @@ export class MfpClient {
     return this.request<Position[]>(`/v1/positions?${query}`);
   }
 
+  listClosedPositions(accountId: string, limit = 10) {
+    const query = new URLSearchParams({ account_id: accountId, status: "closed", limit: String(limit) });
+    return this.request<Position[]>(`/v1/positions?${query}`);
+  }
+
   async cancelAllOrders(accountId: string, idempotencyKey = randomUUID()) {
     return this.request<Record<string, unknown>>(
       `/v1/accounts/${encodeURIComponent(accountId)}/cancel-all-orders`,

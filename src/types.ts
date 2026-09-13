@@ -63,6 +63,11 @@ export interface Position {
   isolated_margin_extra: number;
   status: "open" | "closed";
   opened_at: number;
+  closed_at?: number | null;
+  exit_price?: number | null;
+  realized_pnl?: number | null;
+  fees?: number | null;
+  funding?: number | null;
 }
 
 export interface PositionView extends Position {
