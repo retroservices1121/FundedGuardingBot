@@ -19,6 +19,12 @@ describe("closed position share card", () => {
     expect(metadata.height).toBe(675);
   });
 
+  it("renders visible text instead of missing-font boxes", async () => {
+    const card = await createClosedPositionShareCard(position);
+    const { data } = await sharp(card).raw().toBuffer({ resolveWithObject: true });
+    expect(new Set(data).size).toBeGreaterThan(40);
+  });
+
   it("creates a ready-to-copy caption", () => {
     const caption = closedPositionCaption(position, "FundedGuardianBot");
     expect(caption).toContain("BTC LONG closed");
