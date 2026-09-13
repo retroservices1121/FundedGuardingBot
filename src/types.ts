@@ -47,6 +47,29 @@ export interface Quote {
   [key: string]: unknown;
 }
 
+export interface Position {
+  id: string;
+  account_id: string;
+  market_id: string;
+  provider: string;
+  symbol: string;
+  coin: string;
+  side: "long" | "short";
+  size: number;
+  entry_price: number;
+  leverage: number;
+  margin_mode: "cross" | "isolated";
+  liquidation_price?: number | null;
+  isolated_margin_extra: number;
+  status: "open" | "closed";
+  opened_at: number;
+}
+
+export interface PositionView extends Position {
+  markPrice?: number;
+  estimatedUnrealizedPnl?: number;
+}
+
 export interface TradingPolicy {
   manual_trading_blocked?: boolean;
   opening_exposure_restricted?: boolean;

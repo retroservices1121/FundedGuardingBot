@@ -71,6 +71,7 @@ Database tables and indexes are created automatically on startup.
 - `/connect` — connect or replace a MyFundedPerps credential
 - `/accounts` — select a challenge account
 - `/status` — account and risk snapshot
+- `/positions` — open positions with current mark and estimated P&L
 - `/settings` — select per-trade risk
 - `/trade` — protected trade ticket
 - `/lock` and `/unlock` — persistent daily trading lock

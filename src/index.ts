@@ -12,6 +12,7 @@ await bot.api.setMyCommands([
   { command: "connect", description: "Connect a MyFundedPerps key" },
   { command: "accounts", description: "Choose a challenge account" },
   { command: "status", description: "Account and risk snapshot" },
+  { command: "positions", description: "View open positions" },
   { command: "trade", description: "Create a protected trade" },
   { command: "settings", description: "Personal risk settings" },
   { command: "lock", description: "Lock new trades until tomorrow UTC" },

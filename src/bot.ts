@@ -3,10 +3,10 @@ import { Bot, Context, InlineKeyboard } from "grammy";
 import type { Config } from "./config.js";
 import { SecretBox } from "./crypto.js";
 import { Database, type UserProfile } from "./db.js";
-import { accountMessage, ticketMessage, tradeKeyboard } from "./format.js";
+import { accountMessage, positionsMessage, ticketMessage, tradeKeyboard } from "./format.js";
 import { MfpClient, MfpError } from "./mfp.js";
 import { buildTicket, calculateSize, guardAccount } from "./risk.js";
-import type { Market, Side } from "./types.js";
+import type { Market, PositionView, Side } from "./types.js";
 
 const HOSTS = {
   sandbox: "https://sandbox.myfundedperpetuals.com",
@@ -67,7 +67,7 @@ export function createGuardianBot(config: Config, db: Database) {
   async function showStatus(ctx: Context) {
     const { account, connection } = await selectedAccount(ctx);
     await ctx.reply(accountMessage(account, connection.environment, config.DRY_RUN), {
-      reply_markup: new InlineKeyboard().text("Trade", "trade").text("Refresh", "status").row().text("Accounts", "accounts").text("Settings", "settings").row().text("Lock Today", "lock"),
+      reply_markup: new InlineKeyboard().text("Trade", "trade").text("Open Positions", "positions").row().text("Refresh", "status").text("Accounts", "accounts").row().text("Settings", "settings").text("Lock Today", "lock"),
     });
   }
 
@@ -84,7 +84,7 @@ export function createGuardianBot(config: Config, db: Database) {
     const user = await ensureUser(ctx);
     const connection = await db.getConnection(user.telegramId);
     const keyboard = connection
-      ? new InlineKeyboard().text("Account Status", "status").text("Trade", "trade").row().text("Settings", "settings").text("Accounts", "accounts")
+      ? new InlineKeyboard().text("Account Status", "status").text("Open Positions", "positions").row().text("Trade", "trade").text("Settings", "settings").row().text("Accounts", "accounts")
       : new InlineKeyboard().text("Connect MyFundedPerps", "connect");
     await ctx.reply(connection
       ? `🛡 Welcome back to Funded Guardian.\n\nConnected: ${connection.environment} key ••••${connection.keyLastFour}`
@@ -137,6 +137,34 @@ export function createGuardianBot(config: Config, db: Database) {
   });
   bot.command("status", async (ctx) => { try { await showStatus(ctx); } catch (error) { await ctx.reply(`❌ ${apiError(error)}`); } });
   bot.callbackQuery("status", async (ctx) => { await ctx.answerCallbackQuery(); try { await showStatus(ctx); } catch (error) { await ctx.reply(`❌ ${apiError(error)}`); } });
+
+  async function showPositions(ctx: Context) {
+    const { account, client } = await selectedAccount(ctx);
+    const positions = await client.listOpenPositions(account.id);
+    const marks = new Map<string, number>();
+    await Promise.all([...new Set(positions.slice(0, 10).map((position) => position.market_id))].map(async (marketId) => {
+      try {
+        const quote = await client.getQuote(marketId);
+        marks.set(marketId, quote.mid);
+      } catch {
+        // A position remains useful even when its current quote is temporarily unavailable.
+      }
+    }));
+    const views: PositionView[] = positions.map((position) => {
+      const markPrice = marks.get(position.market_id);
+      const direction = position.side === "long" ? 1 : -1;
+      return {
+        ...position,
+        markPrice,
+        estimatedUnrealizedPnl: markPrice === undefined ? undefined : (markPrice - position.entry_price) * position.size * direction,
+      };
+    });
+    await ctx.reply(positionsMessage(views), {
+      reply_markup: new InlineKeyboard().text("Refresh", "positions").text("Trade", "trade").row().text("Account Status", "status"),
+    });
+  }
+  bot.command("positions", async (ctx) => { try { await showPositions(ctx); } catch (error) { await ctx.reply(`❌ ${apiError(error)}`); } });
+  bot.callbackQuery("positions", async (ctx) => { await ctx.answerCallbackQuery(); try { await showPositions(ctx); } catch (error) { await ctx.reply(`❌ ${apiError(error)}`); } });
   bot.command("accounts", async (ctx) => { try { await showAccounts(ctx); } catch (error) { await ctx.reply(`❌ ${apiError(error)}`); } });
   bot.callbackQuery("accounts", async (ctx) => { await ctx.answerCallbackQuery(); try { await showAccounts(ctx); } catch (error) { await ctx.reply(`❌ ${apiError(error)}`); } });
   bot.callbackQuery(/^account:(\d+)$/, async (ctx) => {

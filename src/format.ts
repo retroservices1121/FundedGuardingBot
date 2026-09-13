@@ -1,5 +1,5 @@
 import { InlineKeyboard } from "grammy";
-import type { ChallengeAccount, TradeTicket } from "./types.js";
+import type { ChallengeAccount, PositionView, TradeTicket } from "./types.js";
 import { accountRisk } from "./risk.js";
 
 export const money = (value: unknown) =>
@@ -55,4 +55,22 @@ export function ticketMessage(ticket: TradeTicket, dryRun: boolean) {
     "",
     `This quote expires shortly. ${dryRun ? "No order will be sent." : "Tap once to submit the protected order."}`,
   ].join("\n");
+}
+
+export function positionsMessage(positions: PositionView[]) {
+  if (!positions.length) return "📭 No open positions on the selected account.";
+  const visible = positions.slice(0, 10);
+  const sections = visible.map((position) => {
+    const direction = position.side === "long" ? "🟢 LONG" : "🔴 SHORT";
+    return [
+      `${direction} · ${position.symbol || position.coin}`,
+      `Size: ${position.size} · ${position.leverage}× ${position.margin_mode}`,
+      `Entry: ${money(position.entry_price)}`,
+      `Current mark: ${money(position.markPrice)}`,
+      `Estimated unrealized P&L: ${money(position.estimatedUnrealizedPnl)}`,
+      `Liquidation: ${money(position.liquidation_price)}`,
+    ].join("\n");
+  });
+  const footer = positions.length > visible.length ? `\n\nShowing 10 of ${positions.length} positions.` : "";
+  return `📈 Open Positions (${positions.length})\n\n${sections.join("\n\n")}${footer}`;
 }

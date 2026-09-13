@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { ChallengeAccount, Market, Quote, Side, TradingPolicy } from "./types.js";
+import type { ChallengeAccount, Market, Position, Quote, Side, TradingPolicy } from "./types.js";
 
 interface ApiEnvelope<T> {
   data: T;
@@ -130,7 +130,7 @@ export class MfpClient {
 
   listOpenPositions(accountId: string) {
     const query = new URLSearchParams({ account_id: accountId, status: "open" });
-    return this.request<Record<string, unknown>[]>(`/v1/positions?${query}`);
+    return this.request<Position[]>(`/v1/positions?${query}`);
   }
 
   async cancelAllOrders(accountId: string, idempotencyKey = randomUUID()) {
