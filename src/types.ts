@@ -28,6 +28,7 @@ export interface ChallengeAccount {
 
 export interface Market {
   id: string;
+  market_id?: string;
   symbol?: string;
   available?: boolean;
   size_precision?: number;

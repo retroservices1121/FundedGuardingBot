@@ -28,7 +28,7 @@ function findMarket(markets: Market[], wanted: string) {
     const symbol = marketSymbol(market);
     return market.available !== false && (symbol === upper || symbol.startsWith(`${upper}USD`) || symbol.startsWith(`${upper}USDT`));
   });
-  return candidates.find((market) => market.id.toLowerCase().startsWith("binance|")) ?? candidates[0];
+  return candidates.find((market) => market.id.startsWith("binance|")) ?? candidates[0];
 }
 
 function activeSubscription(user: UserProfile) {

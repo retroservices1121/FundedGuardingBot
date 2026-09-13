@@ -5,6 +5,19 @@ interface ApiEnvelope<T> {
   data: T;
 }
 
+type RawMarket = Omit<Market, "id"> & { id?: unknown; market_id?: unknown };
+
+export function normalizeMarkets(markets: RawMarket[]): Market[] {
+  return markets.flatMap((market) => {
+    const id = typeof market.id === "string"
+      ? market.id
+      : typeof market.market_id === "string"
+        ? market.market_id
+        : undefined;
+    return id ? [{ ...market, id, market_id: typeof market.market_id === "string" ? market.market_id : undefined }] : [];
+  });
+}
+
 export class MfpError extends Error {
   constructor(
     message: string,
@@ -63,8 +76,10 @@ export class MfpClient {
     );
   }
 
-  listMarkets() {
-    return this.request<Market[]>("/v1/markets");
+  async listMarkets() {
+    const markets = await this.request<RawMarket[]>("/v1/markets");
+    if (!Array.isArray(markets)) throw new Error("MyFundedPerps returned an invalid market list.");
+    return normalizeMarkets(markets);
   }
 
   getQuote(marketId: string, side: Side, size?: number) {
