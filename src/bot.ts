@@ -1,11 +1,12 @@
 import { randomUUID } from "node:crypto";
-import { Bot, Context, InlineKeyboard } from "grammy";
+import { Bot, Context, InlineKeyboard, InputFile } from "grammy";
 import type { Config } from "./config.js";
 import { SecretBox } from "./crypto.js";
 import { Database, type UserProfile } from "./db.js";
 import { accountMessage, closedPositionsMessage, positionsMessage, ticketMessage, tradeKeyboard } from "./format.js";
 import { MfpClient, MfpError } from "./mfp.js";
 import { buildTicket, calculateSize, guardAccount } from "./risk.js";
+import { closedPositionCaption, createClosedPositionShareCard } from "./share-card.js";
 import type { Market, PositionView, Side } from "./types.js";
 
 const HOSTS = {
@@ -172,12 +173,34 @@ export function createGuardianBot(config: Config, db: Database) {
   async function showClosedPositions(ctx: Context) {
     const { account, client } = await selectedAccount(ctx);
     const positions = await client.listClosedPositions(account.id, 10);
+    const keyboard = new InlineKeyboard();
+    positions.forEach((position, index) => {
+      keyboard.text(`Share #${index + 1} · ${position.symbol || position.coin}`, `shareclosed:${index}`);
+      if (index % 2 === 1) keyboard.row();
+    });
+    if (positions.length % 2 === 1) keyboard.row();
+    keyboard.text("Refresh", "closed").text("Open Positions", "positions").row().text("Trade", "trade").text("Account Status", "status");
     await ctx.reply(closedPositionsMessage(positions), {
-      reply_markup: new InlineKeyboard().text("Refresh", "closed").text("Open Positions", "positions").row().text("Trade", "trade").text("Account Status", "status"),
+      reply_markup: keyboard,
     });
   }
   bot.command("closed", async (ctx) => { try { await showClosedPositions(ctx); } catch (error) { await ctx.reply(`❌ ${apiError(error)}`); } });
   bot.callbackQuery("closed", async (ctx) => { await ctx.answerCallbackQuery(); try { await showClosedPositions(ctx); } catch (error) { await ctx.reply(`❌ ${apiError(error)}`); } });
+  bot.callbackQuery(/^shareclosed:(\d+)$/, async (ctx) => {
+    await ctx.answerCallbackQuery({ text: "Creating share card…" });
+    try {
+      const { account, client } = await selectedAccount(ctx);
+      const position = (await client.listClosedPositions(account.id, 10))[Number(ctx.match[1])];
+      if (!position) throw new Error("That closed position is no longer in the recent list. Refresh and try again.");
+      const image = await createClosedPositionShareCard(position);
+      const symbol = (position.symbol || position.coin).replace(/[^A-Za-z0-9_-]/g, "");
+      await ctx.replyWithPhoto(new InputFile(image, `funded-guardian-${symbol}-${position.id}.png`), {
+        caption: closedPositionCaption(position, ctx.me.username),
+      });
+    } catch (error) {
+      await ctx.reply(`❌ Could not create share card\n\n${apiError(error)}`);
+    }
+  });
   bot.command("accounts", async (ctx) => { try { await showAccounts(ctx); } catch (error) { await ctx.reply(`❌ ${apiError(error)}`); } });
   bot.callbackQuery("accounts", async (ctx) => { await ctx.answerCallbackQuery(); try { await showAccounts(ctx); } catch (error) { await ctx.reply(`❌ ${apiError(error)}`); } });
   bot.callbackQuery(/^account:(\d+)$/, async (ctx) => {

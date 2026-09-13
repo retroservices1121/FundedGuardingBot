@@ -73,6 +73,8 @@ Database tables and indexes are created automatically on startup.
 - `/status` — account and risk snapshot
 - `/positions` — open positions with current mark and estimated P&L
 - `/closed` — ten most recent closed positions with realized P&L, fees, and funding
+
+Each closed position includes a **Share #** button that creates a downloadable 1200×675 branded PNG and a ready-to-copy social caption.
 - `/settings` — select per-trade risk
 - `/trade` — protected trade ticket
 - `/lock` and `/unlock` — persistent daily trading lock
