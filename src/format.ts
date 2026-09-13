@@ -68,6 +68,7 @@ export function positionsMessage(positions: PositionView[]) {
       `Entry: ${money(position.entry_price)}`,
       `Current mark: ${money(position.markPrice)}`,
       `Estimated unrealized P&L: ${money(position.estimatedUnrealizedPnl)}`,
+      `Estimated close fee: ${money(position.estimatedCloseFee)}`,
       `Liquidation: ${money(position.liquidation_price)}`,
     ].join("\n");
   });

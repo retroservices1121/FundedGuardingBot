@@ -68,6 +68,7 @@ export interface Position {
 export interface PositionView extends Position {
   markPrice?: number;
   estimatedUnrealizedPnl?: number;
+  estimatedCloseFee?: number;
 }
 
 export interface TradingPolicy {

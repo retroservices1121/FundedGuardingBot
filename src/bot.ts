@@ -141,22 +141,25 @@ export function createGuardianBot(config: Config, db: Database) {
   async function showPositions(ctx: Context) {
     const { account, client } = await selectedAccount(ctx);
     const positions = await client.listOpenPositions(account.id);
-    const marks = new Map<string, number>();
-    await Promise.all([...new Set(positions.slice(0, 10).map((position) => position.market_id))].map(async (marketId) => {
+    const quotes = new Map<string, { mid: number; estimatedFee?: number }>();
+    await Promise.all(positions.slice(0, 10).map(async (position) => {
       try {
-        const quote = await client.getQuote(marketId);
-        marks.set(marketId, quote.mid);
+        const closeSide: Side = position.side === "long" ? "sell" : "buy";
+        const quote = await client.getQuote(position.market_id, closeSide, Math.abs(position.size));
+        quotes.set(position.id, { mid: quote.mid, estimatedFee: quote.estimated_fee });
       } catch {
         // A position remains useful even when its current quote is temporarily unavailable.
       }
     }));
     const views: PositionView[] = positions.map((position) => {
-      const markPrice = marks.get(position.market_id);
+      const quote = quotes.get(position.id);
+      const markPrice = quote?.mid;
       const direction = position.side === "long" ? 1 : -1;
       return {
         ...position,
         markPrice,
         estimatedUnrealizedPnl: markPrice === undefined ? undefined : (markPrice - position.entry_price) * position.size * direction,
+        estimatedCloseFee: quote?.estimatedFee,
       };
     });
     await ctx.reply(positionsMessage(views), {

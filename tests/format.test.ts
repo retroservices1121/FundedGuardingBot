@@ -12,9 +12,11 @@ describe("positionsMessage", () => {
       symbol: "BTC", coin: "BTCUSDT", side: "long", size: 0.1, entry_price: 77_000,
       leverage: 2, margin_mode: "cross", isolated_margin_extra: 0, status: "open",
       opened_at: 1, liquidation_price: 50_000, markPrice: 77_500, estimatedUnrealizedPnl: 50,
+      estimatedCloseFee: 2.33,
     }]);
     expect(message).toContain("Open Positions (1)");
     expect(message).toContain("BTC");
     expect(message).toContain("$50.00");
+    expect(message).toContain("Estimated close fee: $2.33");
   });
 });
