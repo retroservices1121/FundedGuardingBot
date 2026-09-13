@@ -18,6 +18,17 @@ export function normalizeMarkets(markets: RawMarket[]): Market[] {
   });
 }
 
+export function buildQuotePath(marketId: string, side?: Side, size?: number) {
+  if ((side === undefined) !== (size === undefined)) {
+    throw new Error("Quote side and size must be provided together.");
+  }
+  const path = `/v1/markets/${encodeURIComponent(marketId)}/quote`;
+  if (side === undefined || size === undefined) return path;
+  if (!Number.isFinite(size) || size <= 0) throw new Error("Quote size must be positive.");
+  const query = new URLSearchParams({ side, size: String(size) });
+  return `${path}?${query.toString()}`;
+}
+
 export class MfpError extends Error {
   constructor(
     message: string,
@@ -82,12 +93,8 @@ export class MfpClient {
     return normalizeMarkets(markets);
   }
 
-  getQuote(marketId: string, side: Side, size?: number) {
-    const query = new URLSearchParams({ side });
-    if (size !== undefined) query.set("size", String(size));
-    return this.request<Quote>(
-      `/v1/markets/${encodeURIComponent(marketId)}/quote?${query.toString()}`,
-    );
+  getQuote(marketId: string, side?: Side, size?: number) {
+    return this.request<Quote>(buildQuotePath(marketId, side, size));
   }
 
   placeProtectedMarketOrder(input: {

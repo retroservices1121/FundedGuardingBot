@@ -199,7 +199,7 @@ export function createGuardianBot(config: Config, db: Database) {
       if (problems.length) return void (await ctx.reply(`🛑 Trade blocked\n\n${problems.map((item) => `• ${item}`).join("\n")}`));
       const market = findMarket(markets, symbol);
       if (!market) throw new Error(`${symbol} market is not currently available.`);
-      const initialQuote = await client.getQuote(market.id, side);
+      const initialQuote = await client.getQuote(market.id);
       const precision = market.size_precision ?? market.quantity_precision ?? 6;
       const provisionalSize = calculateSize(user.riskUsd, initialQuote.mid, user.stopPercent, precision);
       const quote = await client.getQuote(market.id, side, provisionalSize);
