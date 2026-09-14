@@ -78,6 +78,8 @@ Database tables and indexes are created automatically on startup.
 7. Open the bot, connect an API key, and use `/app` or the **Open Guardian Mini App** button.
 8. Complete the dry-run journey before enabling execution.
 
+The Mini App refreshes authenticated account data automatically every 20 seconds while the Home, Trade, or Activity view is visible. It pauses in the background, while settings are being edited, or while a confirmation sheet is open, then refreshes when Telegram returns to the foreground. Set `MINI_APP_REFRESH_SECONDS` between 10 and 300 seconds to adjust this without a code change.
+
 The Guardian monitor checks connected accounts every 90 seconds by default. Set `GUARDIAN_MONITOR_SECONDS` between 30 and 3,600 seconds to adjust the interval. MyFundedPerps does not currently expose private account WebSocket events, so account alerts use authenticated REST reads while public prices and candles continue to use the public market stream.
 
 The Mini App requires HTTPS when opened through Telegram. Its API accepts only fresh Telegram-signed launch data. MyFundedPerps credentials are decrypted only on the server and are never returned to browser code.

@@ -23,6 +23,7 @@ const schema = z.object({
   MAX_LOSS_ROOM_USAGE_PERCENT: z.coerce.number().positive().max(100).default(20),
   CONFIRMATION_TTL_SECONDS: z.coerce.number().int().min(10).max(300).default(45),
   GUARDIAN_MONITOR_SECONDS: z.coerce.number().int().min(30).max(3600).default(90),
+  MINI_APP_REFRESH_SECONDS: z.coerce.number().int().min(10).max(300).default(20),
   PORT: z.coerce.number().int().positive().default(3000),
   MINI_APP_URL: optionalUrl,
   RAILWAY_PUBLIC_DOMAIN: optionalString,
