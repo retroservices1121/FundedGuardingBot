@@ -81,27 +81,35 @@ export async function createClosedPositionShareCard(position: Position, botUsern
           <stop offset="0%" stop-color="#080b0a"/>
           <stop offset="100%" stop-color="#030504"/>
         </linearGradient>
-        <linearGradient id="ribbon" x1="0" y1="0" x2="1" y2="1">
-          <stop offset="0%" stop-color="#111815"/>
-          <stop offset="48%" stop-color="#315345"/>
-          <stop offset="55%" stop-color="#0d1411"/>
-          <stop offset="100%" stop-color="#030504"/>
+        <linearGradient id="shieldStroke" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0%" stop-color="${accent}" stop-opacity="0.72"/>
+          <stop offset="55%" stop-color="#315345" stop-opacity="0.5"/>
+          <stop offset="100%" stop-color="${accent}" stop-opacity="0.12"/>
         </linearGradient>
         <radialGradient id="halo" cx="72%" cy="48%" r="58%">
           <stop offset="0%" stop-color="${accent}" stop-opacity="0.13"/>
           <stop offset="100%" stop-color="${accent}" stop-opacity="0"/>
         </radialGradient>
-        <clipPath id="rightClip"><rect x="700" width="500" height="675"/></clipPath>
       </defs>
 
       <rect width="1200" height="675" fill="url(#panel)"/>
       <rect width="1200" height="675" fill="url(#halo)"/>
 
-      <g clip-path="url(#rightClip)" fill="none" stroke-linecap="round">
-        <path d="M1190 -90 C860 60 840 190 1145 300 C1360 378 1250 570 820 760" stroke="url(#ribbon)" stroke-width="130"/>
-        <path d="M1190 -90 C860 60 840 190 1145 300 C1360 378 1250 570 820 760" stroke="${accent}" stroke-opacity="0.27" stroke-width="3"/>
-        <path d="M860 -80 C1110 80 1112 190 850 310 C660 398 770 545 1110 720" stroke="url(#ribbon)" stroke-width="94"/>
-        <path d="M860 -80 C1110 80 1112 190 850 310 C660 398 770 545 1110 720" stroke="${accent}" stroke-opacity="0.2" stroke-width="3"/>
+      <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M930 112 L1100 171 V326 C1100 452 1031 544 930 595 C829 544 760 452 760 326 V171 Z" fill="#0b110e" fill-opacity="0.66" stroke="url(#shieldStroke)" stroke-width="11"/>
+        <path d="M930 148 L1065 195 V323 C1065 421 1014 494 930 541 C846 494 795 421 795 323 V195 Z" stroke="#293b33" stroke-width="2"/>
+
+        <rect x="834" y="382" width="42" height="85" rx="5" fill="${accent}" fill-opacity="0.22" stroke="${accent}" stroke-opacity="0.38" stroke-width="2"/>
+        <rect x="900" y="330" width="42" height="137" rx="5" fill="${accent}" fill-opacity="0.36" stroke="${accent}" stroke-opacity="0.52" stroke-width="2"/>
+        <rect x="966" y="263" width="42" height="204" rx="5" fill="${accent}" fill-opacity="0.58" stroke="${accent}" stroke-opacity="0.72" stroke-width="2"/>
+        <path d="M828 349 L900 294 L951 311 L1034 231" stroke="${accent}" stroke-width="7"/>
+        <path d="M1004 230 L1035 230 L1035 261" stroke="${accent}" stroke-width="7"/>
+
+        <circle cx="930" cy="205" r="10" fill="${accent}" stroke="none"/>
+        <path d="M930 215 V238" stroke="${accent}" stroke-width="5"/>
+        <path d="M807 228 H776 M1084 228 H1053" stroke="${accent}" stroke-opacity="0.45" stroke-width="4"/>
+        <circle cx="776" cy="228" r="6" fill="${accent}" fill-opacity="0.55" stroke="none"/>
+        <circle cx="1084" cy="228" r="6" fill="${accent}" fill-opacity="0.55" stroke="none"/>
       </g>
 
       <rect x="42" y="34" width="58" height="58" rx="14" fill="#050807"/>
