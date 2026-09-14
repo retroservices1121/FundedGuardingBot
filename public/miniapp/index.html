@@ -5,9 +5,9 @@
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
   <meta name="theme-color" content="#07100c">
   <title>Funded Guardian</title>
-  <link rel="stylesheet" href="/app/styles-v12.css">
+  <link rel="stylesheet" href="/app/styles-v13.css">
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
-  <script src="/app/app-v12.js" defer></script>
+  <script src="/app/app-v13.js" defer></script>
 </head>
 <body>
   <div class="shell">
@@ -121,8 +121,10 @@
           <button data-market-filter="fx">FX</button>
           <button data-market-filter="commodities">Commodities</button>
         </div>
-        <div class="market-list-head"><span>Market</span><button id="marketSort" data-sort="movers">Top movers ↕</button></div>
-        <div id="marketsList" class="market-list"></div>
+        <div class="market-list-head"><span>Market overview · 24h</span><button id="marketSort" data-sort="openInterest">Open interest ↕</button></div>
+        <div class="heat-legend" aria-label="Heatmap legend"><span>Declining</span><i class="loss"></i><i class="neutral"></i><i class="gain"></i><span>Advancing</span></div>
+        <div id="marketsList" class="market-heatmap" aria-live="polite"></div>
+        <p id="heatmapHint" class="heatmap-hint">Tile size follows open interest. Tap any market to trade it.</p>
         <p class="fine-print market-source">Prices and 24-hour statistics come from MyFundedPerps’ public market feed. Execution still uses Guardian’s protected trade confirmation.</p>
       </section>
 
