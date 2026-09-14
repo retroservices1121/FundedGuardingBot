@@ -4,6 +4,9 @@ import { z } from "zod";
 const bool = z.enum(["true", "false"]).transform((value) => value === "true");
 
 const csv = z.string().transform((value) => value.split(",").map((item) => item.trim().toUpperCase()).filter(Boolean));
+const domains = z.string().transform((value) => value.split(",").map((item) => item.trim().toLowerCase()).filter(Boolean));
+const optionalString = z.preprocess((value) => value === "" ? undefined : value, z.string().min(1).optional());
+const optionalUrl = z.preprocess((value) => value === "" ? undefined : value, z.string().url().optional());
 
 const schema = z.object({
   TELEGRAM_BOT_TOKEN: z.string().min(1),
@@ -21,9 +24,9 @@ const schema = z.object({
   CONFIRMATION_TTL_SECONDS: z.coerce.number().int().min(10).max(300).default(45),
   GUARDIAN_MONITOR_SECONDS: z.coerce.number().int().min(30).max(3600).default(90),
   PORT: z.coerce.number().int().positive().default(3000),
-  MINI_APP_URL: z.string().url().optional(),
-  RAILWAY_PUBLIC_DOMAIN: z.string().min(1).optional(),
-  PULSE_CHANNEL_ID: z.string().min(1).optional(),
+  MINI_APP_URL: optionalUrl,
+  RAILWAY_PUBLIC_DOMAIN: optionalString,
+  PULSE_CHANNEL_ID: optionalString,
   PULSE_PROVIDER: z.string().min(1).default("binance"),
   PULSE_SYMBOLS: csv.default("BTCUSDT,ETHUSDT,SOLUSDT"),
   PULSE_MOVE_PERCENT: z.coerce.number().positive().max(25).default(1),
@@ -32,6 +35,12 @@ const schema = z.object({
   PULSE_SPREAD_BPS: z.coerce.number().positive().max(1000).default(10),
   PULSE_ALERT_COOLDOWN_MINUTES: z.coerce.number().int().min(5).max(1440).default(60),
   PULSE_BRIEF_HOUR_ET: z.coerce.number().int().min(0).max(23).default(8),
+  CRYPTOPANIC_TOKEN: optionalString,
+  CRYPTOPANIC_API_URL: z.string().url().default("https://cryptopanic.com/api/free/v2/posts/"),
+  PULSE_NEWS_POLL_MINUTES: z.coerce.number().int().min(1).max(60).default(5),
+  PULSE_NEWS_MAX_AGE_MINUTES: z.coerce.number().int().min(5).max(180).default(45),
+  PULSE_NEWS_MOVE_PERCENT: z.coerce.number().positive().max(25).default(0.5),
+  PULSE_NEWS_SOURCES: domains.default("reuters.com,apnews.com,bloomberg.com,coindesk.com,theblock.co,cointelegraph.com,decrypt.co,sec.gov,federalreserve.gov"),
 });
 
 export type Config = z.infer<typeof schema>;

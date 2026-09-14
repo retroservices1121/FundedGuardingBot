@@ -89,9 +89,12 @@ function nyClock(now = new Date()) {
   return { date: `${get("year")}-${get("month")}-${get("day")}`, hour: Number(get("hour")) };
 }
 
-function openButton(botUsername: string, symbol?: string): InlineKeyboardMarkup {
+function openButton(botUsername: string, symbol?: string, sourceUrl?: string, sourceName?: string): InlineKeyboardMarkup {
   const payload = symbol ? `?start=pulse_${baseSymbol(symbol)}` : "";
-  return { inline_keyboard: [[{ text: symbol ? `Open ${baseSymbol(symbol)} in Guardian` : "Open Funded Guardian", url: `https://t.me/${botUsername}${payload}` }]] };
+  const rows: InlineKeyboardMarkup["inline_keyboard"] = [];
+  if (sourceUrl) rows.push([{ text: `Read at ${sourceName || "source"}`, url: sourceUrl }]);
+  rows.push([{ text: symbol ? `Open ${baseSymbol(symbol)} in Guardian` : "Open Funded Guardian", url: `https://t.me/${botUsername}${payload}` }]);
+  return { inline_keyboard: rows };
 }
 
 export function startPulseChannel(config: Config, db: Database, telegram: Api, botUsername: string) {
@@ -110,10 +113,10 @@ export function startPulseChannel(config: Config, db: Database, telegram: Api, b
 
   const cooldownBucket = () => Math.floor(Date.now() / (config.PULSE_ALERT_COOLDOWN_MINUTES * 60_000));
 
-  async function publish(key: string, text: string, symbol?: string) {
+  async function publish(key: string, text: string, symbol?: string, sourceUrl?: string, sourceName?: string) {
     if (!await db.claimPulsePublication(key)) return;
     try {
-      await telegram.sendMessage(channelId, text, { reply_markup: openButton(botUsername, symbol), link_preview_options: { is_disabled: true } });
+      await telegram.sendMessage(channelId, text, { reply_markup: openButton(botUsername, symbol, sourceUrl, sourceName), link_preview_options: { is_disabled: true } });
     } catch (error) {
       await db.releasePulsePublication(key);
       console.error("Pulse publication failed:", error);
@@ -227,6 +230,73 @@ export function startPulseChannel(config: Config, db: Database, telegram: Api, b
     });
   }
 
+
+  async function pollNews() {
+    if (!config.CRYPTOPANIC_TOKEN) return;
+    try {
+      const url = new URL(config.CRYPTOPANIC_API_URL);
+      url.searchParams.set("auth_token", config.CRYPTOPANIC_TOKEN);
+      url.searchParams.set("public", "true");
+      url.searchParams.set("kind", "news");
+      url.searchParams.set("regions", "en");
+      url.searchParams.set("currencies", config.PULSE_SYMBOLS.map(baseSymbol).join(","));
+      const response = await fetch(url, { signal: AbortSignal.timeout(12_000) });
+      if (!response.ok) {
+        console.warn(`CryptoPanic returned HTTP ${response.status}; Pulse will try again later.`);
+        return;
+      }
+      const payload = await response.json() as Record<string, unknown>;
+      const rawResults = Array.isArray(payload.results)
+        ? payload.results
+        : payload.data && typeof payload.data === "object" && Array.isArray((payload.data as Record<string, unknown>).results)
+          ? (payload.data as Record<string, unknown>).results as unknown[]
+          : [];
+      for (const raw of rawResults) {
+        if (!raw || typeof raw !== "object") continue;
+        const item = raw as Record<string, unknown>;
+        const title = String(item.title ?? "").replace(/\s+/g, " ").trim().slice(0, 300);
+        const publishedAt = Date.parse(String(item.published_at ?? item.publishedAt ?? item.created_at ?? ""));
+        if (!title || !Number.isFinite(publishedAt) || Date.now() - publishedAt > config.PULSE_NEWS_MAX_AGE_MINUTES * 60_000 || publishedAt > Date.now() + 60_000) continue;
+
+        const source = item.source && typeof item.source === "object" ? item.source as Record<string, unknown> : {};
+        const sourceName = String(source.title ?? source.name ?? source.domain ?? "original source").trim();
+        const candidateUrl = String(item.original_url ?? item.originalUrl ?? item.url ?? "");
+        let articleUrl: URL;
+        try { articleUrl = new URL(candidateUrl); } catch { continue; }
+        if (!["http:", "https:"].includes(articleUrl.protocol)) continue;
+        const sourceDomain = String(source.domain ?? articleUrl.hostname).toLowerCase().replace(/^www\./, "");
+        if (!config.PULSE_NEWS_SOURCES.some((allowed) => sourceDomain === allowed || sourceDomain.endsWith(`.${allowed}`))) continue;
+
+        const currencyRows = Array.isArray(item.currencies) ? item.currencies : [];
+        const tagged = currencyRows.map((currency) => typeof currency === "object" && currency
+          ? String((currency as Record<string, unknown>).code ?? (currency as Record<string, unknown>).symbol ?? "").toUpperCase()
+          : String(currency).toUpperCase());
+        const candidates = config.PULSE_SYMBOLS.filter((symbol) => tagged.includes(baseSymbol(symbol)) || new RegExp(`\\b${baseSymbol(symbol)}\\b`, "i").test(title));
+        const moves = candidates.map((symbol) => {
+          const series = ticks.get(symbol) ?? [];
+          const first = series[0];
+          const last = series.at(-1);
+          return first && last ? { symbol, move: percentMove(first.price, last.price), price: last.price } : undefined;
+        }).filter((value): value is { symbol: string; move: number; price: number } => !!value);
+        moves.sort((a, b) => Math.abs(b.move) - Math.abs(a.move));
+        const market = moves[0];
+        if (!market || Math.abs(market.move) < config.PULSE_NEWS_MOVE_PERCENT) continue;
+
+        const identity = String(item.id ?? candidateUrl).slice(0, 180);
+        const ageMinutes = Math.max(0, Math.round((Date.now() - publishedAt) / 60_000));
+        await publish(
+          `news:${identity}`,
+          `📰 Possible ${baseSymbol(market.symbol)} catalyst\n\n${title}\n\nSource: ${sourceName} · published ${ageMinutes || "<1"}m ago\n${baseSymbol(market.symbol)} move: ${signedPercent(market.move)} over roughly ${config.PULSE_MOVE_WINDOW_MINUTES} minutes\nCurrent price: ${money(market.price)}\n\nThe timing overlaps with the market move, but does not prove the story caused it.\n\n${DISCLAIMER}`,
+          market.symbol,
+          articleUrl.toString(),
+          sourceName,
+        );
+      }
+    } catch (error) {
+      console.warn("CryptoPanic news poll failed; Pulse will try again later.", error);
+    }
+  }
+
   async function publishBrief() {
     const clock = nyClock();
     if (clock.hour !== config.PULSE_BRIEF_HOUR_ET) return;
@@ -248,10 +318,15 @@ export function startPulseChannel(config: Config, db: Database, telegram: Api, b
   const briefTimer = setInterval(() => void publishBrief(), 60_000);
   briefTimer.unref();
   setTimeout(() => void publishBrief(), 15_000).unref();
+  const newsTimer = config.CRYPTOPANIC_TOKEN ? setInterval(() => void pollNews(), config.PULSE_NEWS_POLL_MINUTES * 60_000) : undefined;
+  newsTimer?.unref();
+  if (config.CRYPTOPANIC_TOKEN) setTimeout(() => void pollNews(), 30_000).unref();
+  else console.log("Pulse news catalysts are disabled (CRYPTOPANIC_TOKEN is not set).");
 
   return () => {
     stopped = true;
     clearInterval(briefTimer);
+    if (newsTimer) clearInterval(newsTimer);
     socket?.close();
   };
 }

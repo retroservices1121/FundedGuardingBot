@@ -92,7 +92,11 @@ Pulse gives the public Telegram channel a useful job without turning it into a s
 
 Safe defaults watch BTC, ETH, and SOL; alert on a 1% move over roughly 15 minutes, 3× recent 1-minute volume, or a 10-basis-point best-bid/ask spread. Each alert type is limited to once per market per 60-minute cooldown bucket and publications are deduplicated in PostgreSQL across restarts. Alert buttons hand the reader back to the private bot and open that market in the Mini App.
 
-Real news/catalyst alerts are intentionally not included yet. They require a reputable licensed news source and explicit source attribution; Pulse does not guess why a price moved.
+### Optional news-catalyst alerts
+
+Create a free CryptoPanic token at [cryptopanic.com/developers/api/keys](https://cryptopanic.com/developers/api/keys), then add `CRYPTOPANIC_TOKEN` in Railway. Pulse polls every five minutes and only considers fresh English-language headlines from the configured source-domain allowlist. A headline is published only when it identifies a watched asset and that asset has moved at least 0.5% during the Pulse window.
+
+Every post links to the source, labels the story a **possible catalyst**, reports the overlapping price move, and explicitly says timing does not prove causation. The integration republishes no article body or image. Remove the token to disable news immediately. Adjust `PULSE_NEWS_*` variables in `.env.example` if needed.
 
 ## Safe test sequence
 
