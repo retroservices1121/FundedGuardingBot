@@ -397,6 +397,7 @@ export function startMiniAppServer(config: Config, db: Database) {
     "/app/app-v6.js": { file: "app.js", type: "text/javascript; charset=utf-8" },
     "/app/app-v7.js": { file: "app.js", type: "text/javascript; charset=utf-8" },
     "/app/app-v8.js": { file: "app.js", type: "text/javascript; charset=utf-8" },
+    "/app/app-v9.js": { file: "app.js", type: "text/javascript; charset=utf-8" },
     "/app/styles.css": { file: "styles.css", type: "text/css; charset=utf-8" },
     "/app/styles-v3.css": { file: "styles.css", type: "text/css; charset=utf-8" },
     "/app/styles-v4.css": { file: "styles.css", type: "text/css; charset=utf-8" },
@@ -404,6 +405,7 @@ export function startMiniAppServer(config: Config, db: Database) {
     "/app/styles-v6.css": { file: "styles.css", type: "text/css; charset=utf-8" },
     "/app/styles-v7.css": { file: "styles.css", type: "text/css; charset=utf-8" },
     "/app/styles-v8.css": { file: "styles.css", type: "text/css; charset=utf-8" },
+    "/app/styles-v9.css": { file: "styles.css", type: "text/css; charset=utf-8" },
   };
 
   const server = createServer(async (request, response) => {
