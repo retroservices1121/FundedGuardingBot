@@ -27,3 +27,5 @@ article{border:1px solid var(--line);background:rgba(13,23,18,.94);border-radius
 @media(min-width:600px){.shell{padding-left:24px;padding-right:24px}.bottom-nav{border-left:1px solid var(--line);border-right:1px solid var(--line)}}
 
 #marketSearch,#marketPicker{width:100%;padding:13px;border:1px solid var(--line);border-radius:12px;background:var(--panel);color:var(--text);font:inherit;margin-bottom:8px}#marketSearch::placeholder{color:var(--muted)}
+
+.onboarding-card{padding:24px;margin:12px 0}.onboarding-card p{color:var(--muted);font-size:14px;line-height:1.6}.onboarding-card ol{padding-left:22px}.onboarding-card li{margin:18px 0}.onboarding-card a{color:var(--green)}#apiKey{width:100%;padding:14px;margin:10px 0;background:var(--bg);border:1px solid var(--line);border-radius:12px;color:var(--text)}#connectError{color:var(--red)}[hidden]{display:none!important}

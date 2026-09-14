@@ -10,7 +10,7 @@ const esc=(value)=>String(value??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&l
 const pnlClass=(value)=>value>=0?"positive":"negative";
 function toast(message){const el=$("#toast");el.textContent=message;el.classList.add("show");clearTimeout(toast.timer);toast.timer=setTimeout(()=>el.classList.remove("show"),2600)}
 function showLoading(on){$("#refresh").textContent=on?"…":"↻"}
-async function load(){showLoading(true);try{state.data=preview?demo:await api("/api/dashboard");state.risk=state.data.user.riskUsd;render()}catch(error){toast(error.message);if(!tg?.initData&&!preview)setTimeout(()=>tg?.close(),2200)}finally{showLoading(false)}}
+async function load(){showLoading(true);try{if(!preview){const session=await api("/api/session");showOnboarding(!session.connected);if(!session.connected)return;}state.data=preview?demo:await api("/api/dashboard");state.risk=state.data.user.riskUsd;render()}catch(error){toast(error.message);if(!tg?.initData&&!preview)setTimeout(()=>tg?.close(),2200)}finally{showLoading(false)}}
 function render(){const d=state.data;if(!d)return;$("#mode").textContent=`${d.connection.environment.toUpperCase()}${d.dryRun?" · DRY RUN":""}`;$("#greeting").textContent=`${d.user.firstName||"Your"}'s challenge`;$("#accountSelect").innerHTML=d.accounts.map(a=>`<option value="${esc(a.id)}" ${a.id===d.account.id?"selected":""}>${esc(a.name)}</option>`).join("");
   const safe=$("#safetyCard");safe.classList.toggle("danger",!d.safeToTrade);$("#safetyTitle").textContent=d.safeToTrade?"Safe to trade":"Guardian intervention";$("#safetyText").textContent=d.safeToTrade?"Your account is inside the configured risk limits.":d.problems[0]||"New exposure is not recommended.";
   const risk=d.account.risk||{};$("#equity").textContent=money(risk.equity??d.account.balance);$("#accountStatus").textContent=d.account.status||"unknown";$("#dailyRoom").textContent=money(risk.daily_loss_room);$("#maxRoom").textContent=money(risk.max_loss_room);$("#available").textContent=money(risk.available_balance);$("#exposure").textContent=money(risk.gross_exposure);
@@ -53,3 +53,21 @@ document.addEventListener("click",async e=>{const tab=e.target.closest("[data-ta
 $("#refresh").addEventListener("click",load);$("#reviewTrade").addEventListener("click",reviewTrade);$("#sheetBackdrop").addEventListener("click",closeSheet);$("#accountSelect").addEventListener("change",async e=>{if(preview)return;try{await api("/api/account",{method:"POST",body:JSON.stringify({accountId:e.target.value})});await load()}catch(err){toast(err.message)}});
 $("#lockButton").addEventListener("click",async()=>{if(preview){state.data.user.lockedUntil=state.data.user.lockedUntil?null:new Date(Date.now()+86400000);return render()}try{const locked=!!(state.data.user.lockedUntil&&new Date(state.data.user.lockedUntil)>new Date());await api("/api/lock",{method:"POST",body:JSON.stringify({locked:!locked})});await load();toast(locked?"Trading unlocked":"Trading locked until tomorrow")}catch(err){toast(err.message)}});
 addEventListener("resize",drawChart);load();
+
+function showOnboarding(show){
+ $("#onboarding").hidden=!show;
+ $("main").hidden=show;
+ $(".bottom-nav").hidden=show;
+ if(show)$("#mode").textContent="CONNECT YOUR ACCOUNT";
+}
+$("#connectForm").addEventListener("submit",async e=>{
+ e.preventDefault();
+ const input=$("#apiKey"),button=$("#connectButton"),error=$("#connectError");
+ button.disabled=true;button.textContent="Checking your connection…";error.textContent="";
+ try{
+  const pending=api("/api/connect",{method:"POST",body:JSON.stringify({apiKey:input.value})});
+  input.value="";
+  await pending;showOnboarding(false);toast("Account connected");await load();
+ }catch(err){error.textContent=err.message}
+ finally{button.disabled=false;button.textContent="Connect my account"}
+});

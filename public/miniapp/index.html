@@ -19,6 +19,28 @@
       <button class="icon-button" id="refresh" aria-label="Refresh">↻</button>
     </header>
 
+    <section id="onboarding" hidden>
+      <article class="onboarding-card">
+        <span class="eyebrow">WELCOME TO FUNDED GUARDIAN</span>
+        <h1>Connect your challenge</h1>
+        <p>An API key lets Guardian read your account and submit trades you confirm. You only need to connect once.</p>
+        <ol>
+          <li><strong>Sign in to MyFundedPerps</strong><p>Use the account that owns your challenge.</p></li>
+          <li><strong>Open Settings → API Keys</strong><p>Create a new key and name it “Funded Guardian”.</p></li>
+          <li><strong>Choose the access you need</strong><p>Allow access to the challenge accounts you want to use. Trading requires trade permission; a read-only key cannot place orders.</p></li>
+          <li><strong>Copy your key</strong><p>The secret is shown once. For your regular challenge, use your live key beginning <code>fp_live_</code>. Sandbox keys begin <code>fp_test_</code>.</p></li>
+        </ol>
+        <a href="https://myfundedperpetuals.com" target="_blank" rel="noopener noreferrer">Open MyFundedPerps ↗</a>
+        <p><a href="https://docs.myfundedperpetuals.com/quickstart" target="_blank" rel="noopener noreferrer">Official API key guide ↗</a></p>
+        <form id="connectForm">
+          <label for="apiKey">Paste your API key</label>
+          <input id="apiKey" type="password" required autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="fp_live_…" maxlength="1024">
+          <p id="connectError" role="alert"></p>
+          <button class="primary" id="connectButton" type="submit">Connect my account</button>
+        </form>
+        <p class="fine-print">Your key is encrypted on our server. It is never saved in browser storage. Keep it private. You can revoke it in MyFundedPerps API Key Settings or use /disconnect in the bot.</p>
+      </article>
+    </section>
     <main>
       <section class="view active" data-view="home">
         <div class="welcome"><span id="greeting">Your challenge</span><select id="accountSelect" aria-label="Challenge account"></select></div>

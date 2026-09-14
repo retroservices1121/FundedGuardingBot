@@ -222,6 +222,27 @@ export function startMiniAppServer(config: Config, db: Database) {
   }
 
   async function handleApi(request: IncomingMessage, response: ServerResponse, pathname: string) {
+    if (request.method === "GET" && pathname === "/api/session") {
+      const { user } = await authenticatedUser(request);
+      const connection = await db.getConnection(user.telegramId);
+      return json(response, 200, { connected: !!connection, allowLive: config.ALLOW_LIVE_TRADING });
+    }
+    if (request.method === "POST" && pathname === "/api/connect") {
+      const { user } = await authenticatedUser(request);
+      const payload = await body(request);
+      const key = typeof payload.apiKey === "string" ? payload.apiKey.trim() : "";
+      if (!/^fp_(test|live)_[A-Za-z0-9_-]+$/.test(key)) throw new Error("Paste a MyFundedPerps API key beginning fp_live_ or fp_test_.");
+      const environment = key.startsWith("fp_test_") ? "sandbox" : "live";
+      if (environment === "live" && !config.ALLOW_LIVE_TRADING) throw new Error("Live connections are not enabled. Use a sandbox key or contact the bot owner.");
+      const client = new MfpClient(HOSTS[environment], key);
+      const accounts = await client.listAccounts();
+      if (!accounts?.length) throw new Error("This key has no accessible accounts. Check its account access in MyFundedPerps.");
+      const preferred = accounts.find(item => ["active", "trading"].includes(String(item.status).toLowerCase())) ?? accounts[0]!;
+      await db.saveConnection(user.telegramId, { environment, encryptedApiKey: secrets.encrypt(key), keyLastFour: key.slice(-4) });
+      await db.setSelectedAccount(user.telegramId, preferred.id);
+      await db.setOnboardingState(user.telegramId, null);
+      return json(response, 200, { connected: true });
+    }
     if (request.method === "GET" && pathname === "/api/dashboard") {
       return json(response, 200, await dashboard(request));
     }

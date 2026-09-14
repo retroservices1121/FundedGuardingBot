@@ -86,18 +86,17 @@ export function createGuardianBot(config: Config, db: Database) {
     const user = await ensureUser(ctx);
     const connection = await db.getConnection(user.telegramId);
     const keyboard = new InlineKeyboard();
-    if (connection && appUrl) keyboard.webApp("Open Guardian Mini App", appUrl).row();
+    if (appUrl) keyboard.webApp("Open Guardian Mini App", appUrl).row();
     if (connection) keyboard.text("Account Status", "status").text("Open Positions", "positions").row().text("Closed Positions", "closed").text("Trade", "trade").row().text("Settings", "settings").text("Accounts", "accounts");
     else keyboard.text("Connect MyFundedPerps", "connect");
     await ctx.reply(connection
       ? `🛡 Welcome back to Funded Guardian.\n\nConnected: ${connection.environment} key ••••${connection.keyLastFour}`
-      : "🛡 Funded Guardian protects your challenge before every trade.\n\nStart with a MyFundedPerps sandbox key. New accounts receive a 7-day test period.", { reply_markup: keyboard });
+      : "🛡 Funded Guardian protects your challenge before every trade.\n\nOpen the Mini App for instructions to connect your MyFundedPerps account. New accounts receive a 7-day test period.", { reply_markup: keyboard });
   });
 
   bot.command("app", async (ctx) => {
     if (!appUrl) return void (await ctx.reply("The Mini App URL has not been configured yet."));
     const user = await ensureUser(ctx);
-    if (!(await db.getConnection(user.telegramId))) return void (await ctx.reply("Connect MyFundedPerps first with /connect."));
     await ctx.reply("Open your Funded Guardian workspace:", {
       reply_markup: new InlineKeyboard().webApp("Open Guardian Mini App", appUrl),
     });
@@ -105,6 +104,12 @@ export function createGuardianBot(config: Config, db: Database) {
 
   async function beginConnect(ctx: Context) {
     const user = await ensureUser(ctx);
+    if (appUrl) {
+      await ctx.reply("Connect your account securely in the Mini App. It includes step-by-step instructions for creating your MyFundedPerps API key.", {
+        reply_markup: new InlineKeyboard().webApp("Get started", appUrl),
+      });
+      return;
+    }
     await db.setOnboardingState(user.telegramId, "awaiting_api_key");
     await ctx.reply("Send your MyFundedPerps API key in this private chat. Start with an fp_test_ sandbox key.\n\nGuardian will delete your message immediately, validate the key, and store an encrypted copy. Use /cancel to stop.");
   }
