@@ -5,9 +5,9 @@
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
   <meta name="theme-color" content="#07100c">
   <title>Funded Guardian</title>
-  <link rel="stylesheet" href="/app/styles-v4.css">
+  <link rel="stylesheet" href="/app/styles-v5.css">
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
-  <script src="/app/app-v4.js" defer></script>
+  <script src="/app/app-v5.js" defer></script>
 </head>
 <body>
   <div class="shell">
@@ -61,8 +61,17 @@
           <article><span>Open exposure</span><strong id="exposure">—</strong></article>
         </div>
         <article class="control-card">
-          <div><span class="eyebrow">DAILY CONTROL</span><strong id="lockTitle">Trading is available</strong><p>Use the lock when you have reached today’s goal.</p></div>
+          <div><span class="eyebrow">DAILY CONTROL</span><strong id="lockTitle">Trading is available</strong><p id="dailyControlText">Use the lock when you have reached today’s goal.</p></div>
           <button class="secondary" id="lockButton">Lock today</button>
+        </article>
+        <article class="guardian-settings">
+          <div><span class="eyebrow">AUTOMATIC GUARD</span><strong>Daily lockouts & alerts</strong><p>Optional limits apply to trades placed through Guardian.</p></div>
+          <div class="settings-grid">
+            <label>Lock after profit<input id="profitLock" inputmode="decimal" type="number" min="10" placeholder="Off"></label>
+            <label>Lock after loss<input id="lossLock" inputmode="decimal" type="number" min="10" placeholder="Off"></label>
+          </div>
+          <label class="toggle-row"><input id="alertsEnabled" type="checkbox" checked><span>Telegram position and risk alerts</span></label>
+          <button class="secondary wide" id="saveGuardian">Save Guardian controls</button>
         </article>
       </section>
 
@@ -111,6 +120,8 @@
       <section class="view" data-view="positions">
         <div class="section-title"><div><span class="eyebrow">CURRENT EXPOSURE</span><h2>Positions</h2></div><span class="count" id="positionCount">0</span></div>
         <div id="positionsList" class="stack"></div>
+        <div class="section-title sub-section"><div><span class="eyebrow">PENDING EXECUTION</span><h2>Working orders</h2></div><span class="count" id="orderCount">0</span></div>
+        <div id="ordersList" class="stack"></div>
       </section>
 
       <section class="view" data-view="history">

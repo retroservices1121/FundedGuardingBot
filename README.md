@@ -30,6 +30,12 @@ The repository now includes a mobile-first Telegram Mini App served by the same 
 - Live public MyFundedPerps price streaming and lightweight chart
 - Mini App account overview, loss-room controls, open positions, history, and share downloads
 - Protected quote and confirmation flow shared with the bot's risk policy
+- Complete working-order view with confirmed order cancellation
+- Position chart overlays for entry, take-profit, and stop-loss levels
+- Confirmed 25%, 50%, and full position closes
+- Atomic TP/SL replacement for open positions
+- Optional automatic daily profit and loss lockouts
+- Proactive Telegram alerts for new positions, closed positions, and shrinking loss room
 
 Funded Guardian is free to use. There are no trials, subscriptions, pricing tiers, or payment checkout.
 
@@ -62,6 +68,8 @@ Database tables and indexes are created automatically on startup.
 6. Deploy. The service runs Telegram long polling and the Mini App web server together.
 7. Open the bot, connect an API key, and use `/app` or the **Open Guardian Mini App** button.
 8. Complete the dry-run journey before enabling execution.
+
+The Guardian monitor checks connected accounts every 90 seconds by default. Set `GUARDIAN_MONITOR_SECONDS` between 30 and 3,600 seconds to adjust the interval. MyFundedPerps does not currently expose private account WebSocket events, so account alerts use authenticated REST reads while public prices and candles continue to use the public market stream.
 
 The Mini App requires HTTPS when opened through Telegram. Its API accepts only fresh Telegram-signed launch data. MyFundedPerps credentials are decrypted only on the server and are never returned to browser code.
 

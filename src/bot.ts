@@ -228,7 +228,7 @@ export function createGuardianBot(config: Config, db: Database) {
 
   async function showSettings(ctx: Context) {
     const user = await ensureUser(ctx);
-    await ctx.reply(`⚙️ Risk Settings\n\nRisk per trade: $${user.riskUsd}\nHard cap: $${user.maxRiskUsd}\nStop distance: ${user.stopPercent}%\nReward/risk: ${user.rewardRisk}:1\nLeverage: ${user.leverage}×\nMax loss-room use: ${user.maxLossRoomUsagePercent}%`, {
+    await ctx.reply(`⚙️ Guardian Settings\n\nRisk per trade: $${user.riskUsd}\nHard cap: $${user.maxRiskUsd}\nStop distance: ${user.stopPercent}%\nReward/risk: ${user.rewardRisk}:1\nLeverage: ${user.leverage}×\nMax loss-room use: ${user.maxLossRoomUsagePercent}%\nProfit lock: ${user.dailyProfitLockUsd ? `$${user.dailyProfitLockUsd}` : "Off"}\nLoss lock: ${user.dailyLossLockUsd ? `$${user.dailyLossLockUsd}` : "Off"}\nTelegram alerts: ${user.alertsEnabled ? "On" : "Off"}\n\nOpen the Mini App to configure automatic controls.`, {
       reply_markup: new InlineKeyboard().text("Risk $25", "risk:25").text("$50", "risk:50").text("$75", "risk:75").text("$100", "risk:100").row().text("Back", "status"),
     });
   }
@@ -245,7 +245,7 @@ export function createGuardianBot(config: Config, db: Database) {
 
   async function showTrade(ctx: Context) {
     const user = await ensureUser(ctx);
-    if (user.lockedUntil && user.lockedUntil.getTime() > Date.now()) return void (await ctx.reply("🔒 Trading is locked until 00:00 UTC."));
+    if (user.lockedUntil && user.lockedUntil.getTime() > Date.now()) return void (await ctx.reply("🔒 Trading is locked until the next New York trading day."));
     if (!(await db.getConnection(user.telegramId))) return void (await ctx.reply("Connect MyFundedPerps first with /connect."));
     await ctx.reply(`Choose a protected trade. Risk preset: $${user.riskUsd}.`, { reply_markup: tradeKeyboard() });
   }
@@ -255,7 +255,7 @@ export function createGuardianBot(config: Config, db: Database) {
   async function lock(ctx: Context) {
     const user = await ensureUser(ctx);
     const until = await db.lockUntilTomorrow(user.telegramId);
-    await ctx.reply(`🔒 New trades locked until ${until.toISOString().replace("T", " ").slice(0, 16)} UTC.`);
+    await ctx.reply(`🔒 New trades locked until ${until.toLocaleString("en-US", { timeZone: "America/New_York", dateStyle: "medium", timeStyle: "short" })} ET.`);
   }
   bot.command("lock", lock);
   bot.callbackQuery("lock", async (ctx) => { await ctx.answerCallbackQuery({ text: "Trading locked." }); await lock(ctx); });
@@ -267,7 +267,7 @@ export function createGuardianBot(config: Config, db: Database) {
     const side = ctx.match[2]! as Side;
     try {
       const { user, account, client } = await selectedAccount(ctx);
-      if (user.lockedUntil && user.lockedUntil.getTime() > Date.now()) throw new Error("Trading is locked until 00:00 UTC.");
+      if (user.lockedUntil && user.lockedUntil.getTime() > Date.now()) throw new Error("Trading is locked until the next New York trading day.");
       const [policy, markets] = await Promise.all([client.getTradingPolicy(account.id), client.listMarkets()]);
       const problems = guardAccount(account, policy, user.riskUsd, user.maxRiskUsd, user.maxLossRoomUsagePercent);
       if (problems.length) return void (await ctx.reply(`🛑 Trade blocked\n\n${problems.map((item) => `• ${item}`).join("\n")}`));

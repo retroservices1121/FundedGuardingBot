@@ -6,6 +6,7 @@ import type { Config } from "./config.js";
 import { SecretBox } from "./crypto.js";
 import { Database } from "./db.js";
 import { MfpClient, MfpError } from "./mfp.js";
+import { accountDailyPnl, automaticLockReason } from "./guardian.js";
 import { accountRisk, buildTicket, calculateSize, guardAccount } from "./risk.js";
 import { createClosedPositionShareCard } from "./share-card.js";
 import { validateTelegramInitData, type TelegramMiniAppUser } from "./telegram-auth.js";
@@ -94,10 +95,11 @@ export function startMiniAppServer(config: Config, db: Database) {
 
   async function dashboard(request: IncomingMessage) {
     const state = await selectedAccount(request);
-    const [policy, openPositions, closedPositions, allMarkets] = await Promise.all([
+    const [policy, openPositions, closedPositions, workingOrders, allMarkets] = await Promise.all([
       state.client.getTradingPolicy(state.account.id),
       state.client.listOpenPositions(state.account.id),
       state.client.listClosedPositions(state.account.id, 10),
+      state.client.listWorkingOrders(state.account.id),
       state.client.listMarkets(),
     ]);
 
@@ -138,7 +140,11 @@ export function startMiniAppServer(config: Config, db: Database) {
       state.user.maxRiskUsd,
       state.user.maxLossRoomUsagePercent,
     );
-    if (state.user.lockedUntil && state.user.lockedUntil.getTime() > Date.now()) problems.unshift("Trading is locked until 00:00 UTC.");
+    const dailyPnl = accountDailyPnl(state.account);
+    const autoLockReason = automaticLockReason(state.user, dailyPnl);
+    let lockedUntil = state.user.lockedUntil;
+    if (autoLockReason && (!lockedUntil || lockedUntil.getTime() <= Date.now())) lockedUntil = await db.lockUntilTomorrow(state.user.telegramId);
+    if (lockedUntil && lockedUntil.getTime() > Date.now()) problems.unshift(`${autoLockReason ?? "Trading is locked"} until the next New York trading day.`);
 
     return {
       user: {
@@ -149,7 +155,10 @@ export function startMiniAppServer(config: Config, db: Database) {
         stopPercent: state.user.stopPercent,
         rewardRisk: state.user.rewardRisk,
         leverage: state.user.leverage,
-        lockedUntil: state.user.lockedUntil,
+        dailyProfitLockUsd: state.user.dailyProfitLockUsd,
+        dailyLossLockUsd: state.user.dailyLossLockUsd,
+        alertsEnabled: state.user.alertsEnabled,
+        lockedUntil,
       },
       connection: { environment: state.connection.environment, keyLastFour: state.connection.keyLastFour },
       account: {
@@ -166,6 +175,9 @@ export function startMiniAppServer(config: Config, db: Database) {
       problems,
       positions,
       closedPositions,
+      workingOrders,
+      dailyPnl,
+      autoLockReason,
       markets,
       dryRun: config.DRY_RUN,
     };
@@ -180,7 +192,12 @@ export function startMiniAppServer(config: Config, db: Database) {
     if (!Number.isFinite(requestedRisk) || requestedRisk <= 0 || requestedRisk > state.user.maxRiskUsd) {
       throw new Error(`Risk must be between $1 and $${state.user.maxRiskUsd}.`);
     }
-    if (state.user.lockedUntil && state.user.lockedUntil.getTime() > Date.now()) throw new Error("Trading is locked until 00:00 UTC.");
+    const autoLockReason = automaticLockReason(state.user, accountDailyPnl(state.account));
+    if (autoLockReason) {
+      await db.lockUntilTomorrow(state.user.telegramId);
+      throw new Error(`${autoLockReason}. Guardian locked new trades until the next New York trading day.`);
+    }
+    if (state.user.lockedUntil && state.user.lockedUntil.getTime() > Date.now()) throw new Error("Trading is locked until the next New York trading day.");
     const [policy, markets] = await Promise.all([state.client.getTradingPolicy(state.account.id), state.client.listMarkets()]);
     const problems = guardAccount(state.account, policy, requestedRisk, state.user.maxRiskUsd, state.user.maxLossRoomUsagePercent);
     if (problems.length) throw new Error(problems.join(" "));
@@ -264,6 +281,23 @@ export function startMiniAppServer(config: Config, db: Database) {
       await db.updateRisk(user.telegramId, risk);
       return json(response, 200, { riskUsd: risk });
     }
+    if (request.method === "POST" && pathname === "/api/settings/guardian") {
+      const { user } = await authenticatedUser(request);
+      const payload = await body(request);
+      const optionalAmount = (value: unknown, label: string) => {
+        if (value === null || value === undefined || value === "") return undefined;
+        const amount = Number(value);
+        if (!Number.isFinite(amount) || amount < 10 || amount > 100_000) throw new Error(`${label} must be between $10 and $100,000.`);
+        return amount;
+      };
+      const settings = {
+        dailyProfitLockUsd: optionalAmount(payload.dailyProfitLockUsd, "Profit lock"),
+        dailyLossLockUsd: optionalAmount(payload.dailyLossLockUsd, "Loss lock"),
+        alertsEnabled: payload.alertsEnabled !== false,
+      };
+      await db.updateGuardianSettings(user.telegramId, settings);
+      return json(response, 200, settings);
+    }
     if (request.method === "POST" && pathname === "/api/trade/quote") {
       return json(response, 200, { ticket: await createTicket(request, await body(request)), dryRun: config.DRY_RUN });
     }
@@ -286,7 +320,52 @@ export function startMiniAppServer(config: Config, db: Database) {
         takeProfitPrice: ticket.takeProfitPrice,
         clientOrderId: `guardian-${ticket.id}`,
       });
-      return json(response, 200, { dryRun: false, status: result.status ?? "pending" });
+      return json(response, 200, { dryRun: false, status: result?.status ?? "pending" });
+    }
+    const closeMatch = pathname.match(/^\/api\/positions\/([^/]+)\/close$/);
+    if (request.method === "POST" && closeMatch) {
+      const state = await selectedAccount(request);
+      const payload = await body(request);
+      const positionId = decodeURIComponent(closeMatch[1]!);
+      const position = (await state.client.listOpenPositions(state.account.id)).find(item => item.id === positionId);
+      if (!position) throw new Error("That open position is unavailable. Refresh and try again.");
+      const percent = Number(payload.percent);
+      if (![25, 50, 75, 100].includes(percent)) throw new Error("Choose 25%, 50%, 75%, or 100%.");
+      if (config.DRY_RUN) return json(response, 200, { dryRun: true, status: "validated" });
+      const size = percent === 100 ? undefined : Number((position.size * percent / 100).toPrecision(12));
+      const result = await state.client.closePosition(position.id, size);
+      return json(response, 200, { dryRun: false, status: result?.status ?? "pending" });
+    }
+    const protectionMatch = pathname.match(/^\/api\/positions\/([^/]+)\/protection$/);
+    if (request.method === "PUT" && protectionMatch) {
+      const state = await selectedAccount(request);
+      const payload = await body(request);
+      const positionId = decodeURIComponent(protectionMatch[1]!);
+      const [positions, workingOrders] = await Promise.all([
+        state.client.listOpenPositions(state.account.id),
+        state.client.listWorkingOrders(state.account.id),
+      ]);
+      const position = positions.find(item => item.id === positionId);
+      if (!position) throw new Error("That open position is unavailable. Refresh and try again.");
+      const takeProfitPrice = Number(payload.takeProfitPrice);
+      const stopLossPrice = Number(payload.stopLossPrice);
+      if (![takeProfitPrice, stopLossPrice].every(value => Number.isFinite(value) && value > 0)) throw new Error("Enter positive TP and SL prices.");
+      const reference = position.entry_price;
+      if (position.side === "long" && !(takeProfitPrice > reference && stopLossPrice < reference)) throw new Error("For a long, TP must be above entry and SL below entry.");
+      if (position.side === "short" && !(takeProfitPrice < reference && stopLossPrice > reference)) throw new Error("For a short, TP must be below entry and SL above entry.");
+      if (config.DRY_RUN) return json(response, 200, { dryRun: true, status: "validated" });
+      const result = await state.client.replacePositionExits(position, workingOrders, takeProfitPrice, stopLossPrice);
+      return json(response, 200, { dryRun: false, status: result?.status ?? "updated" });
+    }
+    const cancelMatch = pathname.match(/^\/api\/orders\/([^/]+)\/cancel$/);
+    if (request.method === "POST" && cancelMatch) {
+      const state = await selectedAccount(request);
+      const orderId = decodeURIComponent(cancelMatch[1]!);
+      const order = (await state.client.listWorkingOrders(state.account.id)).find(item => item.id === orderId);
+      if (!order) throw new Error("That working order is unavailable. Refresh and try again.");
+      if (config.DRY_RUN) return json(response, 200, { dryRun: true, status: "validated" });
+      const result = await state.client.cancelOrder(order.id);
+      return json(response, 200, { dryRun: false, status: result?.status ?? "canceling" });
     }
     const shareMatch = pathname.match(/^\/api\/share\/([^/]+)$/);
     if (request.method === "GET" && shareMatch) {
@@ -312,9 +391,11 @@ export function startMiniAppServer(config: Config, db: Database) {
     "/app/app.js": { file: "app.js", type: "text/javascript; charset=utf-8" },
     "/app/app-v3.js": { file: "app.js", type: "text/javascript; charset=utf-8" },
     "/app/app-v4.js": { file: "app.js", type: "text/javascript; charset=utf-8" },
+    "/app/app-v5.js": { file: "app.js", type: "text/javascript; charset=utf-8" },
     "/app/styles.css": { file: "styles.css", type: "text/css; charset=utf-8" },
     "/app/styles-v3.css": { file: "styles.css", type: "text/css; charset=utf-8" },
     "/app/styles-v4.css": { file: "styles.css", type: "text/css; charset=utf-8" },
+    "/app/styles-v5.css": { file: "styles.css", type: "text/css; charset=utf-8" },
   };
 
   const server = createServer(async (request, response) => {

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { ChallengeAccount, Market, Position, Quote, Side, TradingPolicy } from "./types.js";
+import type { ChallengeAccount, Market, Position, Quote, Side, TradingPolicy, WorkingOrder } from "./types.js";
 
 interface ApiEnvelope<T> {
   data: T;
@@ -27,6 +27,16 @@ export function buildQuotePath(marketId: string, side?: Side, size?: number) {
   if (!Number.isFinite(size) || size <= 0) throw new Error("Quote size must be positive.");
   const query = new URLSearchParams({ side, size: String(size) });
   return `${path}?${query.toString()}`;
+}
+
+export function orderPrice(order: WorkingOrder) {
+  return order.trigger_price ?? order.limit_price ?? order.price ?? undefined;
+}
+
+export function positionExitOrders(orders: WorkingOrder[], position: Position) {
+  return orders.filter((order) => order.reduce_only === true
+    && (order.position_id === position.id || order.target_position_id === position.id
+      || (!order.position_id && !order.target_position_id && order.market_id === position.market_id)));
 }
 
 export class MfpError extends Error {
@@ -136,6 +146,50 @@ export class MfpClient {
   listClosedPositions(accountId: string, limit = 10) {
     const query = new URLSearchParams({ account_id: accountId, status: "closed", limit: String(limit) });
     return this.request<Position[]>(`/v1/positions?${query}`);
+  }
+
+  async listWorkingOrders(accountId: string) {
+    const query = new URLSearchParams({ account_id: accountId, status: "working" });
+    const result = await this.request<WorkingOrder[] | { orders?: WorkingOrder[]; items?: WorkingOrder[] }>(`/v1/orders?${query}`);
+    if (Array.isArray(result)) return result;
+    return result.orders ?? result.items ?? [];
+  }
+
+  cancelOrder(orderId: string) {
+    return this.request<Record<string, unknown>>(`/v1/orders/${encodeURIComponent(orderId)}`, { method: "DELETE" });
+  }
+
+  closePosition(positionId: string, size?: number, idempotencyKey: string = randomUUID()) {
+    if (size !== undefined && (!Number.isFinite(size) || size <= 0)) throw new Error("Close size must be positive.");
+    return this.request<Record<string, unknown>>(`/v1/positions/${encodeURIComponent(positionId)}/close`, {
+      method: "POST",
+      headers: { "Idempotency-Key": idempotencyKey },
+      body: JSON.stringify({ type: "market", ...(size === undefined ? {} : { size }), client_order_id: `guardian-close-${randomUUID().slice(0, 12)}` }),
+    });
+  }
+
+  replacePositionExits(position: Position, currentOrders: WorkingOrder[], takeProfitPrice: number, stopLossPrice: number) {
+    if (![takeProfitPrice, stopLossPrice].every(value => Number.isFinite(value) && value > 0)) throw new Error("TP and SL prices must be positive.");
+    const exits = positionExitOrders(currentOrders, position);
+    const expected = exits.flatMap((order) => {
+      const price = orderPrice(order);
+      return price === undefined ? [] : [{
+        order_id: order.id,
+        price,
+        size: order.size,
+      }];
+    });
+    const operations: Record<string, unknown>[] = exits.map(order => ({ kind: "cancel", order_id: order.id }));
+    const tpIndex = operations.length;
+    const slIndex = tpIndex + 1;
+    operations.push(
+      { kind: "place", group: "tp", execution_type: "market", price: takeProfitPrice, size: position.size, oco_pair_with_operation_index: slIndex },
+      { kind: "place", group: "sl", execution_type: "market", price: stopLossPrice, size: position.size, oco_pair_with_operation_index: tpIndex },
+    );
+    return this.request<Record<string, unknown>>(`/v1/positions/${encodeURIComponent(position.id)}/exit-orders`, {
+      method: "PUT",
+      body: JSON.stringify({ expected_position_size: position.size, expected_orders: expected, operations }),
+    });
   }
 
   async cancelAllOrders(accountId: string, idempotencyKey = randomUUID()) {

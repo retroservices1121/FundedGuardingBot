@@ -15,6 +15,9 @@ export interface UserProfile {
   rewardRisk: number;
   leverage: number;
   maxLossRoomUsagePercent: number;
+  dailyProfitLockUsd?: number;
+  dailyLossLockUsd?: number;
+  alertsEnabled: boolean;
   lockedUntil?: Date;
 }
 
@@ -64,6 +67,17 @@ export class Database {
         consumed_at TIMESTAMPTZ
       );
       CREATE INDEX IF NOT EXISTS trade_tickets_user_idx ON trade_tickets(telegram_id, expires_at);
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS daily_profit_lock_usd NUMERIC;
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS daily_loss_lock_usd NUMERIC;
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS alerts_enabled BOOLEAN NOT NULL DEFAULT TRUE;
+      CREATE TABLE IF NOT EXISTS guardian_monitor_state (
+        telegram_id BIGINT PRIMARY KEY REFERENCES users(telegram_id) ON DELETE CASCADE,
+        account_id TEXT NOT NULL,
+        open_position_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
+        closed_position_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
+        risk_band TEXT NOT NULL DEFAULT 'normal',
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
     `);
   }
 
@@ -86,7 +100,10 @@ export class Database {
       selectedAccountId: row.selected_account_id ?? undefined, riskUsd: Number(row.risk_usd),
       maxRiskUsd: Number(row.max_risk_usd), stopPercent: Number(row.stop_percent),
       rewardRisk: Number(row.reward_risk), leverage: Number(row.leverage),
-      maxLossRoomUsagePercent: Number(row.max_loss_room_usage_percent), lockedUntil: row.locked_until ?? undefined,
+      maxLossRoomUsagePercent: Number(row.max_loss_room_usage_percent),
+      dailyProfitLockUsd: row.daily_profit_lock_usd === null ? undefined : Number(row.daily_profit_lock_usd),
+      dailyLossLockUsd: row.daily_loss_lock_usd === null ? undefined : Number(row.daily_loss_lock_usd),
+      alertsEnabled: row.alerts_enabled !== false, lockedUntil: row.locked_until ?? undefined,
     };
   }
 
@@ -134,7 +151,7 @@ export class Database {
 
   async lockUntilTomorrow(telegramId: number) {
     const { rows } = await this.pool.query(
-      `UPDATE users SET locked_until=date_trunc('day', NOW() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC' + INTERVAL '1 day'
+      `UPDATE users SET locked_until=(date_trunc('day', NOW() AT TIME ZONE 'America/New_York') + INTERVAL '1 day') AT TIME ZONE 'America/New_York'
        WHERE telegram_id=$1 RETURNING locked_until`, [telegramId],
     );
     return rows[0].locked_until as Date;
@@ -142,6 +159,47 @@ export class Database {
 
   unlock(telegramId: number) {
     return this.pool.query(`UPDATE users SET locked_until=NULL WHERE telegram_id=$1`, [telegramId]);
+  }
+
+  async updateGuardianSettings(telegramId: number, settings: { dailyProfitLockUsd?: number; dailyLossLockUsd?: number; alertsEnabled: boolean }) {
+    await this.pool.query(
+      `UPDATE users SET daily_profit_lock_usd=$2, daily_loss_lock_usd=$3, alerts_enabled=$4, updated_at=NOW() WHERE telegram_id=$1`,
+      [telegramId, settings.dailyProfitLockUsd ?? null, settings.dailyLossLockUsd ?? null, settings.alertsEnabled],
+    );
+  }
+
+  async listMonitoredUsers(limit = 100) {
+    const { rows } = await this.pool.query(
+      `SELECT telegram_id FROM users WHERE alerts_enabled=TRUE OR daily_profit_lock_usd IS NOT NULL OR daily_loss_lock_usd IS NOT NULL ORDER BY updated_at DESC LIMIT $1`,
+      [limit],
+    );
+    const users = [];
+    for (const row of rows) {
+      const telegramId = Number(row.telegram_id);
+      const connection = await this.getConnection(telegramId);
+      if (connection) users.push({ user: await this.getUser(telegramId), connection });
+    }
+    return users;
+  }
+
+  async getMonitorState(telegramId: number) {
+    const { rows } = await this.pool.query(`SELECT * FROM guardian_monitor_state WHERE telegram_id=$1`, [telegramId]);
+    const row = rows[0];
+    return row ? {
+      accountId: String(row.account_id),
+      openPositionIds: Array.isArray(row.open_position_ids) ? row.open_position_ids.map(String) : [],
+      closedPositionIds: Array.isArray(row.closed_position_ids) ? row.closed_position_ids.map(String) : [],
+      riskBand: String(row.risk_band),
+    } : undefined;
+  }
+
+  async saveMonitorState(telegramId: number, state: { accountId: string; openPositionIds: string[]; closedPositionIds: string[]; riskBand: string }) {
+    await this.pool.query(
+      `INSERT INTO guardian_monitor_state (telegram_id, account_id, open_position_ids, closed_position_ids, risk_band)
+       VALUES ($1,$2,$3,$4,$5) ON CONFLICT (telegram_id) DO UPDATE SET account_id=$2, open_position_ids=$3,
+       closed_position_ids=$4, risk_band=$5, updated_at=NOW()`,
+      [telegramId, state.accountId, JSON.stringify(state.openPositionIds), JSON.stringify(state.closedPositionIds), state.riskBand],
+    );
   }
 
   async putTicket(ticket: TradeTicket) {

@@ -76,6 +76,29 @@ export interface PositionView extends Position {
   estimatedCloseFee?: number;
 }
 
+export interface WorkingOrder {
+  id: string;
+  account_id: string;
+  market_id: string;
+  position_id?: string | null;
+  target_position_id?: string | null;
+  symbol?: string;
+  coin?: string;
+  side: Side;
+  type: string;
+  status: string;
+  size: number;
+  limit_price?: number | null;
+  trigger_price?: number | null;
+  price?: number | null;
+  reduce_only?: boolean;
+  group?: "tp" | "sl" | string | null;
+  exit_group?: "tp" | "sl" | string | null;
+  execution_type?: "market" | "limit";
+  created_at?: number;
+  [key: string]: unknown;
+}
+
 export interface TradingPolicy {
   manual_trading_blocked?: boolean;
   opening_exposure_restricted?: boolean;
