@@ -95,7 +95,7 @@ The Mini App requires HTTPS when opened through Telegram. Its API accepts only f
 - `/positions` — open positions with current mark and estimated P&L
 - `/closed` — ten most recent closed positions with realized P&L, fees, and funding
 
-Each closed position includes a **Share #** button that creates a downloadable 1200×675 branded PNG and a ready-to-copy social caption.
+Each closed position includes a **Share card** button that creates a 1200×675 branded PNG with explicit Copy image, Download PNG, and native Share actions. The direct image clipboard path supports pasting into X on compatible Windows Telegram WebViews.
 - `/settings` — select per-trade risk
 - `/trade` — protected trade ticket
 - `/lock` and `/unlock` — persistent daily trading lock
