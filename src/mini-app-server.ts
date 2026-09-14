@@ -318,7 +318,9 @@ export function startMiniAppServer(config: Config, db: Database) {
     "/app": { file: "index.html", type: "text/html; charset=utf-8" },
     "/app/": { file: "index.html", type: "text/html; charset=utf-8" },
     "/app/app.js": { file: "app.js", type: "text/javascript; charset=utf-8" },
+    "/app/app-v3.js": { file: "app.js", type: "text/javascript; charset=utf-8" },
     "/app/styles.css": { file: "styles.css", type: "text/css; charset=utf-8" },
+    "/app/styles-v3.css": { file: "styles.css", type: "text/css; charset=utf-8" },
   };
 
   const server = createServer(async (request, response) => {
