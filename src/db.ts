@@ -51,7 +51,8 @@ export class Database {
         max_loss_room_usage_percent NUMERIC NOT NULL DEFAULT 20,
         locked_until TIMESTAMPTZ,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
       CREATE TABLE IF NOT EXISTS mfp_connections (
         telegram_id BIGINT PRIMARY KEY REFERENCES users(telegram_id) ON DELETE CASCADE,
@@ -72,6 +73,10 @@ export class Database {
       ALTER TABLE users ADD COLUMN IF NOT EXISTS daily_loss_lock_usd NUMERIC;
       ALTER TABLE users ADD COLUMN IF NOT EXISTS alerts_enabled BOOLEAN NOT NULL DEFAULT TRUE;
       ALTER TABLE users ADD COLUMN IF NOT EXISTS enforce_guardrails BOOLEAN NOT NULL DEFAULT TRUE;
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMPTZ;
+      UPDATE users SET last_seen_at=updated_at WHERE last_seen_at IS NULL;
+      ALTER TABLE users ALTER COLUMN last_seen_at SET DEFAULT NOW();
+      ALTER TABLE users ALTER COLUMN last_seen_at SET NOT NULL;
       CREATE TABLE IF NOT EXISTS guardian_monitor_state (
         telegram_id BIGINT PRIMARY KEY REFERENCES users(telegram_id) ON DELETE CASCADE,
         account_id TEXT NOT NULL,
@@ -80,6 +85,19 @@ export class Database {
         risk_band TEXT NOT NULL DEFAULT 'normal',
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
+      CREATE TABLE IF NOT EXISTS trade_executions (
+        id BIGSERIAL PRIMARY KEY,
+        ticket_id TEXT NOT NULL UNIQUE,
+        telegram_id BIGINT NOT NULL REFERENCES users(telegram_id) ON DELETE CASCADE,
+        account_id TEXT NOT NULL,
+        symbol TEXT NOT NULL,
+        side TEXT NOT NULL,
+        notional_usd NUMERIC NOT NULL,
+        dry_run BOOLEAN NOT NULL,
+        status TEXT NOT NULL,
+        executed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+      CREATE INDEX IF NOT EXISTS trade_executions_time_idx ON trade_executions(executed_at DESC);
       CREATE TABLE IF NOT EXISTS pulse_publications (
         dedupe_key TEXT PRIMARY KEY,
         published_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -91,7 +109,7 @@ export class Database {
   async upsertUser(input: { telegramId: number; username?: string; firstName?: string }) {
     await this.pool.query(
       `INSERT INTO users (telegram_id, username, first_name) VALUES ($1,$2,$3)
-       ON CONFLICT (telegram_id) DO UPDATE SET username=$2, first_name=$3, updated_at=NOW()`,
+       ON CONFLICT (telegram_id) DO UPDATE SET username=$2, first_name=$3, updated_at=NOW(), last_seen_at=NOW()`,
       [input.telegramId, input.username ?? null, input.firstName ?? null],
     );
     return this.getUser(input.telegramId);
@@ -240,8 +258,57 @@ export class Database {
     } catch (error) { await client.query("ROLLBACK"); throw error; } finally { client.release(); }
   }
 
+  async recordTradeExecution(input: { ticketId: string; telegramId: number; accountId: string; symbol: string; side: string; notionalUsd: number; dryRun: boolean; status: string }) {
+    await this.pool.query(
+      `INSERT INTO trade_executions (ticket_id, telegram_id, account_id, symbol, side, notional_usd, dry_run, status)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT (ticket_id) DO NOTHING`,
+      [input.ticketId, input.telegramId, input.accountId, input.symbol, input.side, input.notionalUsd, input.dryRun, input.status],
+    );
+  }
+
+  async adminStats() {
+    const { rows } = await this.pool.query(`
+      SELECT
+        (SELECT COUNT(*) FROM users)::int AS users,
+        (SELECT COUNT(*) FROM mfp_connections)::int AS connected,
+        (SELECT COUNT(*) FROM users WHERE last_seen_at >= NOW() - INTERVAL '24 hours')::int AS active_day,
+        (SELECT COUNT(*) FROM users WHERE last_seen_at >= NOW() - INTERVAL '7 days')::int AS active_week,
+        (SELECT COUNT(*) FROM users WHERE created_at >= NOW() - INTERVAL '7 days')::int AS new_week,
+        (SELECT COUNT(*) FROM trade_executions WHERE dry_run=FALSE)::int AS live_trades,
+        COALESCE((SELECT SUM(notional_usd) FROM trade_executions WHERE dry_run=FALSE),0)::numeric AS live_notional,
+        COALESCE((SELECT SUM(notional_usd) FROM trade_executions WHERE dry_run=FALSE AND executed_at >= NOW() - INTERVAL '7 days'),0)::numeric AS week_notional,
+        (SELECT COUNT(*) FROM trade_executions WHERE dry_run=TRUE)::int AS dry_runs
+    `);
+    const summary = rows[0];
+    const recent = await this.pool.query(`
+      SELECT e.symbol, e.side, e.notional_usd, e.dry_run, e.status, e.executed_at, u.username
+      FROM trade_executions e JOIN users u ON u.telegram_id=e.telegram_id
+      ORDER BY e.executed_at DESC LIMIT 20
+    `);
+    return {
+      users: Number(summary.users),
+      connected: Number(summary.connected),
+      activeDay: Number(summary.active_day),
+      activeWeek: Number(summary.active_week),
+      newWeek: Number(summary.new_week),
+      liveTrades: Number(summary.live_trades),
+      liveNotional: Number(summary.live_notional),
+      weekNotional: Number(summary.week_notional),
+      dryRuns: Number(summary.dry_runs),
+      recent: recent.rows.map((row) => ({
+        symbol: String(row.symbol),
+        side: String(row.side),
+        notionalUsd: Number(row.notional_usd),
+        dryRun: Boolean(row.dry_run),
+        status: String(row.status),
+        executedAt: row.executed_at as Date,
+        username: row.username ? String(row.username) : undefined,
+      })),
+    };
+  }
+
   async stats() {
-    const { rows } = await this.pool.query(`SELECT COUNT(*)::int users, COUNT(*) FILTER (WHERE c.telegram_id IS NOT NULL)::int connected FROM users u LEFT JOIN mfp_connections c USING (telegram_id)`);
-    return rows[0] as { users: number; connected: number };
+    const stats = await this.adminStats();
+    return { users: stats.users, connected: stats.connected };
   }
 }

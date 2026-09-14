@@ -29,6 +29,8 @@ The repository now includes a mobile-first Telegram Mini App served by the same 
 - Global dry-run and live-key kill switches
 - Railway/Docker deployment
 - Telegram-signed Mini App authentication
+- Guided first-launch onboarding with API-key creation, permission, validation, and success steps
+- Owner-only Mini App analytics for users, connections, activity, successful entry orders, notional, dry runs, and recent executions
 - Live public MyFundedPerps price streaming and lightweight chart
 - Live best bid, spread, best ask, top-level size, and bid/ask liquidity balance on the protected trade ticket
 - Dedicated live Markets tab with search, favorites, category filters, 24-hour movers, volume, and protected long/short shortcuts
@@ -123,6 +125,8 @@ Each closed position includes a **Share card** button that creates a 1200×675 b
 - `/lock` and `/unlock` — persistent daily trading lock
 - `/disconnect` — delete stored credentials
 - `/adminstats` — basic owner metrics
+
+When `ADMIN_TELEGRAM_ID` is configured, the same Telegram user sees an owner-only **Guardian analytics** entry in Mini App Settings. The API verifies that Telegram ID server-side before returning analytics. Live order and notional totals include only successful Guardian entry submissions recorded after this analytics release; dry-run confirmations are counted separately.
 
 ## Security notes
 

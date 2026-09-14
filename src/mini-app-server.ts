@@ -245,7 +245,12 @@ export function startMiniAppServer(config: Config, db: Database) {
     if (request.method === "GET" && pathname === "/api/session") {
       const { user } = await authenticatedUser(request);
       const connection = await db.getConnection(user.telegramId);
-      return json(response, 200, { connected: !!connection, allowLive: config.ALLOW_LIVE_TRADING });
+      return json(response, 200, { connected: !!connection, allowLive: config.ALLOW_LIVE_TRADING, isAdmin: config.ADMIN_TELEGRAM_ID === user.telegramId });
+    }
+    if (request.method === "GET" && pathname === "/api/admin/stats") {
+      const { telegram } = await authenticatedUser(request);
+      if (!config.ADMIN_TELEGRAM_ID || telegram.id !== config.ADMIN_TELEGRAM_ID) throw new Error("Admin access required.");
+      return json(response, 200, await db.adminStats());
     }
     if (request.method === "POST" && pathname === "/api/connect") {
       const { user } = await authenticatedUser(request);
@@ -329,7 +334,10 @@ export function startMiniAppServer(config: Config, db: Database) {
       if (!ticket) throw new Error("This quote expired or was already used.");
       const currentUser = await db.getUser(user.telegramId);
       if (currentUser.lockedUntil && currentUser.lockedUntil.getTime() > Date.now()) throw new Error("Trading is locked.");
-      if (config.DRY_RUN) return json(response, 200, { dryRun: true, status: "validated" });
+      if (config.DRY_RUN) {
+        await db.recordTradeExecution({ ticketId: ticket.id, telegramId: user.telegramId, accountId: ticket.accountId, symbol: ticket.symbol, side: ticket.side, notionalUsd: ticket.estimatedNotional, dryRun: true, status: "validated" });
+        return json(response, 200, { dryRun: true, status: "validated" });
+      }
       const result = await client.placeProtectedMarketOrder({
         accountId: ticket.accountId,
         marketId: ticket.marketId,
@@ -341,7 +349,9 @@ export function startMiniAppServer(config: Config, db: Database) {
         takeProfitPrice: ticket.takeProfitPrice,
         clientOrderId: `guardian-${ticket.id}`,
       });
-      return json(response, 200, { dryRun: false, status: result?.status ?? "pending" });
+      const status = String(result?.status ?? "pending");
+      await db.recordTradeExecution({ ticketId: ticket.id, telegramId: user.telegramId, accountId: ticket.accountId, symbol: ticket.symbol, side: ticket.side, notionalUsd: ticket.estimatedNotional, dryRun: false, status });
+      return json(response, 200, { dryRun: false, status });
     }
     const closeMatch = pathname.match(/^\/api\/positions\/([^/]+)\/close$/);
     if (request.method === "POST" && closeMatch) {
@@ -418,6 +428,7 @@ export function startMiniAppServer(config: Config, db: Database) {
     "/app/app-v8.js": { file: "app.js", type: "text/javascript; charset=utf-8" },
     "/app/app-v9.js": { file: "app.js", type: "text/javascript; charset=utf-8" },
     "/app/app-v10.js": { file: "app.js", type: "text/javascript; charset=utf-8" },
+    "/app/app-v11.js": { file: "app.js", type: "text/javascript; charset=utf-8" },
     "/app/styles.css": { file: "styles.css", type: "text/css; charset=utf-8" },
     "/app/styles-v3.css": { file: "styles.css", type: "text/css; charset=utf-8" },
     "/app/styles-v4.css": { file: "styles.css", type: "text/css; charset=utf-8" },
@@ -427,6 +438,7 @@ export function startMiniAppServer(config: Config, db: Database) {
     "/app/styles-v8.css": { file: "styles.css", type: "text/css; charset=utf-8" },
     "/app/styles-v9.css": { file: "styles.css", type: "text/css; charset=utf-8" },
     "/app/styles-v10.css": { file: "styles.css", type: "text/css; charset=utf-8" },
+    "/app/styles-v11.css": { file: "styles.css", type: "text/css; charset=utf-8" },
   };
 
   const server = createServer(async (request, response) => {

@@ -5,9 +5,9 @@
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
   <meta name="theme-color" content="#07100c">
   <title>Funded Guardian</title>
-  <link rel="stylesheet" href="/app/styles-v10.css">
+  <link rel="stylesheet" href="/app/styles-v11.css">
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
-  <script src="/app/app-v10.js" defer></script>
+  <script src="/app/app-v11.js" defer></script>
 </head>
 <body>
   <div class="shell">
@@ -20,26 +20,62 @@
     </header>
 
     <section id="onboarding" hidden>
-      <article class="onboarding-card">
-        <span class="eyebrow">WELCOME TO FUNDED GUARDIAN</span>
-        <h1>Connect your challenge</h1>
-        <p>An API key lets Guardian read your account and submit trades you confirm. You only need to connect once.</p>
-        <ol>
-          <li><strong>Sign in to MyFundedPerps</strong><p>Use the account that owns your challenge.</p></li>
-          <li><strong>Open Settings → API Keys</strong><p>Create a new key and name it “Funded Guardian”.</p></li>
-          <li><strong>Choose the access you need</strong><p>Allow access to the challenge accounts you want to use. Trading requires trade permission; a read-only key cannot place orders.</p></li>
-          <li><strong>Copy your key</strong><p>The secret is shown once. For your regular challenge, use your live key beginning <code>fp_live_</code>. Sandbox keys begin <code>fp_test_</code>.</p></li>
-        </ol>
-        <a href="https://myfundedperpetuals.com" target="_blank" rel="noopener noreferrer">Open MyFundedPerps ↗</a>
-        <p><a href="https://docs.myfundedperpetuals.com/quickstart" target="_blank" rel="noopener noreferrer">Official API key guide ↗</a></p>
-        <form id="connectForm">
-          <label for="apiKey">Paste your API key</label>
-          <input id="apiKey" type="password" required autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="fp_live_…" maxlength="1024">
-          <p id="connectError" role="alert"></p>
-          <button class="primary" id="connectButton" type="submit">Connect my account</button>
-        </form>
-        <p class="fine-print">Your key is encrypted on our server. It is never saved in browser storage. Keep it private. You can revoke it in MyFundedPerps API Key Settings or use /disconnect in the bot.</p>
-      </article>
+      <div class="onboarding-shell">
+        <div class="onboarding-progress" aria-label="Setup progress">
+          <i class="active" data-onboarding-dot="0"></i><i data-onboarding-dot="1"></i><i data-onboarding-dot="2"></i><i data-onboarding-dot="3"></i>
+        </div>
+        <article class="onboarding-card onboarding-step" data-onboarding-step="0">
+          <span class="eyebrow">WELCOME TO FUNDED GUARDIAN</span>
+          <h1>A simpler way to protect your challenge</h1>
+          <p>Guardian connects to the MyFundedPerps account you already own. It can show your challenge limits, calculate risk-based size and submit only the trades you confirm.</p>
+          <div class="onboarding-promises"><span>✓ Your key is encrypted</span><span>✓ Every trade requires confirmation</span><span>✓ You control all guardrails</span></div>
+          <button class="primary wide" data-onboarding-next>Set up my account</button>
+          <p class="fine-print">Setup usually takes a few minutes. Funded Guardian is an independent tool and is not financial advice.</p>
+        </article>
+
+        <article class="onboarding-card onboarding-step" data-onboarding-step="1" hidden>
+          <span class="eyebrow">STEP 1 OF 3</span>
+          <h1>Create your API key</h1>
+          <div class="instruction-card"><b>1</b><div><strong>Open MyFundedPerps</strong><p>Sign in with the account that owns your challenge.</p></div></div>
+          <div class="instruction-card"><b>2</b><div><strong>Open Settings</strong><p>Choose <em>API Keys</em>, then create a new key named “Funded Guardian”.</p></div></div>
+          <div class="instruction-card"><b>3</b><div><strong>Copy the key immediately</strong><p>The secret may only be displayed once. Keep it private.</p></div></div>
+          <a class="primary external-button" href="https://myfundedperpetuals.com" target="_blank" rel="noopener noreferrer">Open MyFundedPerps ↗</a>
+          <a class="guide-link" href="https://docs.myfundedperpetuals.com/quickstart" target="_blank" rel="noopener noreferrer">View the official API guide ↗</a>
+          <div class="onboarding-actions"><button class="text-button" data-onboarding-back>Back</button><button class="secondary" data-onboarding-next>I created my key</button></div>
+        </article>
+
+        <article class="onboarding-card onboarding-step" data-onboarding-step="2" hidden>
+          <span class="eyebrow">STEP 2 OF 3</span>
+          <h1>Choose the right access</h1>
+          <div class="permission-row"><span>Required</span><div><strong>Account access</strong><p>Select the challenge accounts you want Guardian to display.</p></div></div>
+          <div class="permission-row"><span>For trading</span><div><strong>Trade permission</strong><p>Enable trading only if you want Guardian to submit orders after your confirmation. Read-only keys cannot trade.</p></div></div>
+          <div class="permission-row optional"><span>Not needed</span><div><strong>Withdrawals or payouts</strong><p>Guardian does not need or use withdrawal, payout, billing or challenge-purchase access.</p></div></div>
+          <div class="security-note">Never send your API key in a group or channel. Paste it only into this private Telegram Mini App.</div>
+          <div class="onboarding-actions"><button class="text-button" data-onboarding-back>Back</button><button class="secondary" data-onboarding-next>Continue</button></div>
+        </article>
+
+        <article class="onboarding-card onboarding-step" data-onboarding-step="3" hidden>
+          <span class="eyebrow">STEP 3 OF 3</span>
+          <h1>Connect Funded Guardian</h1>
+          <p>Paste the API key below. Guardian validates it directly with MyFundedPerps before saving an encrypted copy.</p>
+          <form id="connectForm">
+            <label for="apiKey">MyFundedPerps API key</label>
+            <input id="apiKey" type="password" required autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="fp_live_…" maxlength="1024">
+            <div class="key-checks"><span>Encrypted at rest</span><span>Never stored in this browser</span><span>Revocable from MyFundedPerps</span></div>
+            <p id="connectError" role="alert"></p>
+            <button class="primary wide" id="connectButton" type="submit">Validate and connect</button>
+          </form>
+          <button class="text-button onboarding-back-alone" data-onboarding-back>Back</button>
+        </article>
+
+        <article class="onboarding-card onboarding-step success-step" data-onboarding-step="4" hidden>
+          <div class="success-mark">✓</div>
+          <span class="eyebrow">CONNECTION COMPLETE</span>
+          <h1>Your challenge is ready</h1>
+          <p>Guardian found your account. You can now review its limits, set your personal controls and create protected trade tickets.</p>
+          <button class="primary wide" id="finishOnboarding">Open my dashboard</button>
+        </article>
+      </div>
     </section>
     <main>
       <section class="view active" data-view="home">
@@ -169,6 +205,28 @@
           <button class="secondary wide" id="saveGuardian">Save Guardian controls</button>
           <p class="settings-disclaimer">Funded Guardian provides user-configured risk tools and account information—not financial or trading advice. You control your settings and every trading decision. Guardrails cannot guarantee that a challenge will pass or prevent losses.</p>
         </article>
+        <article class="admin-entry" id="adminEntry" hidden>
+          <div><span class="eyebrow">OWNER ONLY</span><strong>Guardian analytics</strong><p>Users, connected accounts and tracked execution volume.</p></div>
+          <button class="secondary" data-tab="admin">Open</button>
+        </article>
+      </section>
+
+      <section class="view admin-view" data-view="admin">
+        <div class="section-title"><div><span class="eyebrow">OWNER ANALYTICS</span><h2>Admin</h2></div><button class="text-button" data-tab="settings">Back</button></div>
+        <p class="admin-scope">Private to the Telegram ID configured in <code>ADMIN_TELEGRAM_ID</code>. Execution totals are tracked from this analytics release forward.</p>
+        <div class="admin-metrics">
+          <article><span>Total users</span><strong id="adminUsers">—</strong></article>
+          <article><span>Connected</span><strong id="adminConnected">—</strong></article>
+          <article><span>Active 24h</span><strong id="adminActiveDay">—</strong></article>
+          <article><span>Active 7d</span><strong id="adminActiveWeek">—</strong></article>
+          <article><span>New users 7d</span><strong id="adminNewWeek">—</strong></article>
+          <article><span>Live orders</span><strong id="adminLiveTrades">—</strong></article>
+          <article class="wide-metric"><span>Tracked live entry notional</span><strong id="adminNotional">—</strong></article>
+          <article><span>7d notional</span><strong id="adminNotionalWeek">—</strong></article>
+          <article><span>Dry-run tests</span><strong id="adminDryRuns">—</strong></article>
+        </div>
+        <div class="section-title sub-section"><div><span class="eyebrow">LATEST ACTIVITY</span><h2>Executions</h2></div><button class="icon-button" id="refreshAdmin" aria-label="Refresh analytics">↻</button></div>
+        <div id="adminExecutions" class="stack"><article class="empty">Loading analytics…</article></div>
       </section>
     </main>
 

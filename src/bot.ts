@@ -310,7 +310,10 @@ export function createGuardianBot(config: Config, db: Database) {
     if (user.lockedUntil && user.lockedUntil.getTime() > Date.now()) return void (await ctx.answerCallbackQuery({ text: "Trading is locked.", show_alert: true }));
     await ctx.answerCallbackQuery({ text: config.DRY_RUN ? "Dry run complete." : "Submitting protected order…" });
     await ctx.editMessageReplyMarkup({ reply_markup: undefined }).catch(() => undefined);
-    if (config.DRY_RUN) return void (await ctx.reply(`✅ DRY RUN passed\n\n${ticket.symbol} ${ticket.side.toUpperCase()} validated. No order was sent.`));
+    if (config.DRY_RUN) {
+      await db.recordTradeExecution({ ticketId: ticket.id, telegramId: user.telegramId, accountId: ticket.accountId, symbol: ticket.symbol, side: ticket.side, notionalUsd: ticket.estimatedNotional, dryRun: true, status: "validated" });
+      return void (await ctx.reply(`✅ DRY RUN passed\n\n${ticket.symbol} ${ticket.side.toUpperCase()} validated. No order was sent.`));
+    }
     try {
       const { client } = await session(ctx);
       const result = await client.placeProtectedMarketOrder({
@@ -318,7 +321,9 @@ export function createGuardianBot(config: Config, db: Database) {
         expectedPrice: ticket.expectedPrice, leverage: ticket.leverage, stopLossPrice: ticket.stopLossPrice,
         takeProfitPrice: ticket.takeProfitPrice, clientOrderId: `guardian-${ticket.id}`,
       });
-      await ctx.reply(`✅ Protected order submitted\n\n${ticket.symbol} ${ticket.side.toUpperCase()} · ${ticket.size}\nStatus: ${String(result.status ?? "pending")}\nTP and SL were included.`);
+      const status = String(result.status ?? "pending");
+      await db.recordTradeExecution({ ticketId: ticket.id, telegramId: user.telegramId, accountId: ticket.accountId, symbol: ticket.symbol, side: ticket.side, notionalUsd: ticket.estimatedNotional, dryRun: false, status });
+      await ctx.reply(`✅ Protected order submitted\n\n${ticket.symbol} ${ticket.side.toUpperCase()} · ${ticket.size}\nStatus: ${status}\nTP and SL were included.`);
     } catch (error) { await ctx.reply(`❌ Order not submitted\n\n${apiError(error)}`); }
   });
 
