@@ -431,6 +431,7 @@ export function startMiniAppServer(config: Config, db: Database) {
     "/app/app-v11.js": { file: "app.js", type: "text/javascript; charset=utf-8" },
     "/app/app-v12.js": { file: "app.js", type: "text/javascript; charset=utf-8" },
     "/app/app-v13.js": { file: "app.js", type: "text/javascript; charset=utf-8" },
+    "/app/app-v15.js": { file: "app.js", type: "text/javascript; charset=utf-8" },
     "/app/styles.css": { file: "styles.css", type: "text/css; charset=utf-8" },
     "/app/styles-v3.css": { file: "styles.css", type: "text/css; charset=utf-8" },
     "/app/styles-v4.css": { file: "styles.css", type: "text/css; charset=utf-8" },
@@ -444,6 +445,7 @@ export function startMiniAppServer(config: Config, db: Database) {
     "/app/styles-v12.css": { file: "styles.css", type: "text/css; charset=utf-8" },
     "/app/styles-v13.css": { file: "styles.css", type: "text/css; charset=utf-8" },
     "/app/styles-v14.css": { file: "styles.css", type: "text/css; charset=utf-8" },
+    "/app/styles-v15.css": { file: "styles.css", type: "text/css; charset=utf-8" },
   };
 
   const server = createServer(async (request, response) => {
@@ -466,7 +468,7 @@ export function startMiniAppServer(config: Config, db: Database) {
         response.writeHead(200, {
           "Content-Type": asset.type,
           "Cache-Control": "no-store, max-age=0",
-          "Content-Security-Policy": "default-src 'self'; script-src 'self' https://telegram.org; connect-src 'self' wss://api-stream.myfundedperpetuals.com; img-src 'self' data:; style-src 'self' 'unsafe-inline'; frame-ancestors https://web.telegram.org https://telegram.org https://*.telegram.org;",
+          "Content-Security-Policy": "default-src 'self'; script-src 'self' https://telegram.org; connect-src 'self' wss://api-stream.myfundedperpetuals.com; img-src 'self' data: https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline'; frame-ancestors https://web.telegram.org https://telegram.org https://*.telegram.org;",
           "X-Content-Type-Options": "nosniff",
           "Referrer-Policy": "no-referrer",
         });
