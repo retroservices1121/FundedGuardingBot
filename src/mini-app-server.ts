@@ -432,7 +432,6 @@ export function startMiniAppServer(config: Config, db: Database) {
     "/app/app-v12.js": { file: "app.js", type: "text/javascript; charset=utf-8" },
     "/app/app-v13.js": { file: "app.js", type: "text/javascript; charset=utf-8" },
     "/app/app-v15.js": { file: "app.js", type: "text/javascript; charset=utf-8" },
-    "/app/app-v16.js": { file: "app.js", type: "text/javascript; charset=utf-8" },
     "/app/styles.css": { file: "styles.css", type: "text/css; charset=utf-8" },
     "/app/styles-v3.css": { file: "styles.css", type: "text/css; charset=utf-8" },
     "/app/styles-v4.css": { file: "styles.css", type: "text/css; charset=utf-8" },

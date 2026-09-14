@@ -82,21 +82,11 @@ function renderMarketBoard(){
  $("#availableMarkets").textContent=all.length;
  $("#pricedMarkets").textContent=[...state.marketFeed.values()].filter(x=>Number.isFinite(x.price)).length;
  $("#providerCount").textContent=new Set(all.map(m=>m.provider)).size;
- const visible=items.slice(0,q?36:24),container=$("#marketsList"),existing=new Map([...container.querySelectorAll(".heat-tile[data-market-id]")].map(tile=>[tile.dataset.marketId,tile])),keep=new Set();
- if(!visible.length){if(!container.querySelector(".heat-empty"))container.innerHTML='<article class="empty heat-empty">No markets match this view.</article>'}
- else{
-  container.querySelector(".heat-empty")?.remove();
-  visible.forEach(({m,i,s},rank)=>{
-   const id=String(m.id),change=Number(s.change),hasChange=Number.isFinite(change),direction=!hasChange?"flat":change>0?"up":change<0?"down":"flat",strength=hasChange?Math.min(Math.abs(change)/8,1).toFixed(3):"0",changeText=hasChange?`${change>=0?"+":""}${change.toFixed(2)}%`:"—",initials=String(m.symbol||m.coin).replace(/[^A-Za-z0-9]/g,"").slice(0,4),sizeClass=rank===0?"heat-xl":rank<3?"heat-lg":rank<7?"heat-md":"heat-sm",hasOi=Number.isFinite(Number(s.openInterest)),stat=hasOi?`OI ${compactMoney(Number(s.openInterest))}`:`VOL ${compactMoney(Number(s.volume))}`;
-   let tile=existing.get(id);
-   if(!tile){tile=document.createElement("article");tile.dataset.marketId=id;tile.setAttribute("role","button");tile.tabIndex=0;tile.innerHTML=`<button class="favorite-market" aria-label="Favorite ${esc(m.symbol)}">★</button>${marketLogo(m,initials)}<strong></strong><b></b><small></small>`}
-   keep.add(id);tile.className=`heat-tile ${sizeClass} ${direction}`;tile.style.setProperty("--heat-strength",strength);tile.dataset.heatMarket=String(i);tile.setAttribute("aria-label",`${m.symbol}, ${changeText}, open trade`);
-   const favorite=tile.querySelector(".favorite-market");favorite.dataset.favoriteMarket=String(i);favorite.classList.toggle("active",state.favorites.has(m.id));
-   tile.querySelector("strong").textContent=m.symbol;tile.querySelector("b").textContent=changeText;tile.querySelector("small").textContent=stat;
-   container.appendChild(tile)
-  });
-  existing.forEach((tile,id)=>{if(!keep.has(id))tile.remove()})
- }
+ const visible=items.slice(0,q?36:24);
+ $("#marketsList").innerHTML=visible.length?visible.map(({m,i,s},rank)=>{
+  const change=Number(s.change),hasChange=Number.isFinite(change),direction=!hasChange?"flat":change>0?"up":change<0?"down":"flat",strength=hasChange?Math.min(Math.abs(change)/8,1).toFixed(3):"0",changeText=hasChange?`${change>=0?"+":""}${change.toFixed(2)}%`:"—",initials=String(m.symbol||m.coin).replace(/[^A-Za-z0-9]/g,"").slice(0,4),sizeClass=rank===0?"heat-xl":rank<3?"heat-lg":rank<7?"heat-md":"heat-sm",hasOi=Number.isFinite(Number(s.openInterest)),stat=hasOi?`OI ${compactMoney(Number(s.openInterest))}`:`VOL ${compactMoney(Number(s.volume))}`;
+  return `<article class="heat-tile ${sizeClass} ${direction}" style="--heat-strength:${strength}" data-heat-market="${i}" role="button" tabindex="0" aria-label="${esc(m.symbol)}, ${changeText}, open trade"><button class="favorite-market ${state.favorites.has(m.id)?"active":""}" data-favorite-market="${i}" aria-label="Favorite ${esc(m.symbol)}">★</button>${marketLogo(m,initials)}<strong>${esc(m.symbol)}</strong><b>${changeText}</b><small>${stat}</small></article>`
+ }).join(""):`<article class="empty heat-empty">No markets match this view.</article>`;
  const fallback=visible.some(({s})=>!Number.isFinite(Number(s.openInterest)));
  $("#heatmapHint").textContent=state.marketSort==="movers"?"Largest 24-hour moves appear first. Tap any market to trade it.":state.marketSort==="volume"?"Tile size follows 24-hour volume. Tap any market to trade it.":fallback?"Tile size uses open interest when available and 24-hour volume while it loads. Tap any market to trade it.":"Tile size follows open interest. Tap any market to trade it."
 }
