@@ -17,9 +17,17 @@ const schema = z.object({
   DEFAULT_LEVERAGE: z.coerce.number().int().positive().max(100).default(2),
   MAX_LOSS_ROOM_USAGE_PERCENT: z.coerce.number().positive().max(100).default(20),
   CONFIRMATION_TTL_SECONDS: z.coerce.number().int().min(10).max(300).default(45),
+  PORT: z.coerce.number().int().positive().default(3000),
+  MINI_APP_URL: z.string().url().optional(),
+  RAILWAY_PUBLIC_DOMAIN: z.string().min(1).optional(),
 });
 
 export type Config = z.infer<typeof schema>;
+
+export function miniAppUrl(config: Config) {
+  return config.MINI_APP_URL
+    ?? (config.RAILWAY_PUBLIC_DOMAIN ? `https://${config.RAILWAY_PUBLIC_DOMAIN}/app` : undefined);
+}
 
 export function loadConfig(env = process.env): Config {
   const parsed = schema.parse(env);

@@ -2,6 +2,8 @@
 
 Customer-ready Telegram SaaS foundation for MyFundedPerps challenge accounts. Every Telegram user can connect an individual API key, select an account, save personal risk settings, and create a confirmed protected trade.
 
+The repository now includes a mobile-first Telegram Mini App served by the same Railway service. The bot remains the alert and onboarding layer; the Mini App provides the visual Guardian, trading, positions, and history experience.
+
 ## Customer journey
 
 1. Customer opens the bot and taps **Connect MyFundedPerps**.
@@ -25,6 +27,10 @@ Customer-ready Telegram SaaS foundation for MyFundedPerps challenge accounts. Ev
 - Owner-only `/adminstats`
 - Global dry-run and live-key kill switches
 - Railway/Docker deployment
+- Telegram-signed Mini App authentication
+- Live public MyFundedPerps price streaming and lightweight chart
+- Mini App account overview, loss-room controls, open positions, history, and share downloads
+- Protected quote and confirmation flow shared with the bot's risk policy
 
 Payment checkout is deliberately not connected yet. Trial expiration is enforced, and the database is ready for a billing webhook to set `plan='pro'`.
 
@@ -53,8 +59,12 @@ Database tables and indexes are created automatically on startup.
 2. Add a PostgreSQL service.
 3. Add `TELEGRAM_BOT_TOKEN`, `DATABASE_URL`, `ENCRYPTION_KEY`, and optionally `ADMIN_TELEGRAM_ID`.
 4. Keep `DRY_RUN=true` and `ALLOW_LIVE_TRADING=false` for initial testing.
-5. Deploy. The Dockerfile runs Telegram long polling, so no public domain is required.
-6. Open the bot, connect an `fp_test_` key, and complete the dry-run journey.
+5. Generate a Railway public domain for the bot service. Railway exposes it as `RAILWAY_PUBLIC_DOMAIN`; alternatively set `MINI_APP_URL=https://your-domain/app`.
+6. Deploy. The service runs Telegram long polling and the Mini App web server together.
+7. Open the bot, connect an API key, and use `/app` or the **Open Guardian Mini App** button.
+8. Complete the dry-run journey before enabling execution.
+
+The Mini App requires HTTPS when opened through Telegram. Its API accepts only fresh Telegram-signed launch data. MyFundedPerps credentials are decrypted only on the server and are never returned to browser code.
 
 ## Safe test sequence
 
@@ -69,6 +79,7 @@ Database tables and indexes are created automatically on startup.
 
 - `/start` — onboarding or dashboard
 - `/connect` — connect or replace a MyFundedPerps credential
+- `/app` — open the Funded Guardian Mini App
 - `/accounts` — select a challenge account
 - `/status` — account and risk snapshot
 - `/positions` — open positions with current mark and estimated P&L

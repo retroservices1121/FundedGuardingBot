@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+  <meta name="theme-color" content="#07100c">
+  <title>Funded Guardian</title>
+  <link rel="stylesheet" href="/app/styles.css">
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <script src="/app/app.js" defer></script>
+</head>
+<body>
+  <div class="shell">
+    <header class="topbar">
+      <div class="brand">
+        <img src="/app/logo.png" alt="">
+        <div><strong>Funded Guardian</strong><span id="mode">GUARDIAN MODE</span></div>
+      </div>
+      <button class="icon-button" id="refresh" aria-label="Refresh">↻</button>
+    </header>
+
+    <main>
+      <section class="view active" data-view="home">
+        <div class="welcome"><span id="greeting">Your challenge</span><select id="accountSelect" aria-label="Challenge account"></select></div>
+        <article class="safety-card" id="safetyCard">
+          <div><span class="eyebrow">ACCOUNT GUARDIAN</span><h1 id="safetyTitle">Checking your account…</h1><p id="safetyText">Loading current rules and loss limits.</p></div>
+          <span class="status-orb"></span>
+        </article>
+        <article class="balance-card">
+          <span class="eyebrow">CURRENT EQUITY</span>
+          <div class="balance-row"><strong id="equity">—</strong><span id="accountStatus">—</span></div>
+          <div class="progress-label"><span>Challenge progress</span><span id="progressText">—</span></div>
+          <div class="progress"><i id="progressBar"></i></div>
+        </article>
+        <div class="metric-grid">
+          <article><span>Daily loss room</span><strong id="dailyRoom">—</strong></article>
+          <article><span>Maximum loss room</span><strong id="maxRoom">—</strong></article>
+          <article><span>Available balance</span><strong id="available">—</strong></article>
+          <article><span>Open exposure</span><strong id="exposure">—</strong></article>
+        </div>
+        <article class="control-card">
+          <div><span class="eyebrow">DAILY CONTROL</span><strong id="lockTitle">Trading is available</strong><p>Use the lock when you have reached today’s goal.</p></div>
+          <button class="secondary" id="lockButton">Lock today</button>
+        </article>
+      </section>
+
+      <section class="view" data-view="trade">
+        <div class="section-title"><div><span class="eyebrow">PROTECTED EXECUTION</span><h2>Trade</h2></div><span class="live-dot">LIVE</span></div>
+        <div class="market-tabs" id="marketTabs"></div>
+        <article class="chart-card">
+          <div class="price-head"><div><span id="marketName">BTC / USDT</span><strong id="marketPrice">—</strong></div><span id="streamStatus">Connecting</span></div>
+          <canvas id="priceChart"></canvas>
+          <div class="chart-caption"><span>Live public market feed</span><span id="provider">—</span></div>
+        </article>
+        <div class="direction">
+          <button class="selected buy" data-side="buy">Long</button>
+          <button data-side="sell">Short</button>
+        </div>
+        <article class="ticket-control">
+          <div class="label-row"><span>Risk at stop</span><strong id="riskValue">$75</strong></div>
+          <div class="risk-options" id="riskOptions"></div>
+          <div class="trade-summary">
+            <div><span>Stop distance</span><strong id="stopValue">—</strong></div>
+            <div><span>Reward / risk</span><strong id="rewardValue">—</strong></div>
+            <div><span>Leverage</span><strong id="leverageValue">—</strong></div>
+          </div>
+          <button class="primary" id="reviewTrade">Review protected trade</button>
+          <p class="fine-print">Guardian checks the account again before creating a quote. Nothing is submitted without confirmation.</p>
+        </article>
+      </section>
+
+      <section class="view" data-view="positions">
+        <div class="section-title"><div><span class="eyebrow">CURRENT EXPOSURE</span><h2>Positions</h2></div><span class="count" id="positionCount">0</span></div>
+        <div id="positionsList" class="stack"></div>
+      </section>
+
+      <section class="view" data-view="history">
+        <div class="section-title"><div><span class="eyebrow">RECENT RESULTS</span><h2>History</h2></div></div>
+        <div id="historyList" class="stack"></div>
+      </section>
+    </main>
+
+    <nav class="bottom-nav">
+      <button class="active" data-tab="home"><i>⌂</i><span>Home</span></button>
+      <button data-tab="trade"><i>↗</i><span>Trade</span></button>
+      <button data-tab="positions"><i>◎</i><span>Positions</span></button>
+      <button data-tab="history"><i>◷</i><span>History</span></button>
+    </nav>
+  </div>
+
+  <div class="sheet-backdrop" id="sheetBackdrop"></div>
+  <section class="trade-sheet" id="tradeSheet" aria-modal="true">
+    <div class="sheet-handle"></div>
+    <div id="sheetContent"></div>
+  </section>
+  <div class="toast" id="toast"></div>
+</body>
+</html>

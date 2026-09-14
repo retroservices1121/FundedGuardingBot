@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { Bot, Context, InlineKeyboard, InputFile } from "grammy";
-import type { Config } from "./config.js";
+import { miniAppUrl, type Config } from "./config.js";
 import { SecretBox } from "./crypto.js";
 import { Database, type UserProfile } from "./db.js";
 import { accountMessage, closedPositionsMessage, positionsMessage, ticketMessage, tradeKeyboard } from "./format.js";
@@ -39,6 +39,7 @@ function activeSubscription(user: UserProfile) {
 export function createGuardianBot(config: Config, db: Database) {
   const bot = new Bot(config.TELEGRAM_BOT_TOKEN);
   const secrets = new SecretBox(config.ENCRYPTION_KEY);
+  const appUrl = miniAppUrl(config);
 
   async function ensureUser(ctx: Context) {
     if (!ctx.from) throw new Error("Telegram user information is unavailable.");
@@ -84,12 +85,22 @@ export function createGuardianBot(config: Config, db: Database) {
   bot.command("start", async (ctx) => {
     const user = await ensureUser(ctx);
     const connection = await db.getConnection(user.telegramId);
-    const keyboard = connection
-      ? new InlineKeyboard().text("Account Status", "status").text("Open Positions", "positions").row().text("Closed Positions", "closed").text("Trade", "trade").row().text("Settings", "settings").text("Accounts", "accounts")
-      : new InlineKeyboard().text("Connect MyFundedPerps", "connect");
+    const keyboard = new InlineKeyboard();
+    if (connection && appUrl) keyboard.webApp("Open Guardian Mini App", appUrl).row();
+    if (connection) keyboard.text("Account Status", "status").text("Open Positions", "positions").row().text("Closed Positions", "closed").text("Trade", "trade").row().text("Settings", "settings").text("Accounts", "accounts");
+    else keyboard.text("Connect MyFundedPerps", "connect");
     await ctx.reply(connection
       ? `🛡 Welcome back to Funded Guardian.\n\nConnected: ${connection.environment} key ••••${connection.keyLastFour}`
       : "🛡 Funded Guardian protects your challenge before every trade.\n\nStart with a MyFundedPerps sandbox key. New accounts receive a 7-day test period.", { reply_markup: keyboard });
+  });
+
+  bot.command("app", async (ctx) => {
+    if (!appUrl) return void (await ctx.reply("The Mini App URL has not been configured yet."));
+    const user = await ensureUser(ctx);
+    if (!(await db.getConnection(user.telegramId))) return void (await ctx.reply("Connect MyFundedPerps first with /connect."));
+    await ctx.reply("Open your Funded Guardian workspace:", {
+      reply_markup: new InlineKeyboard().webApp("Open Guardian Mini App", appUrl),
+    });
   });
 
   async function beginConnect(ctx: Context) {
