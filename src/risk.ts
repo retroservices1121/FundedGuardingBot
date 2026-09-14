@@ -1,11 +1,68 @@
-import type { ChallengeAccount, Market, Quote, Side, TradeTicket, TradingPolicy } from "./types.js";
+import type { ChallengeAccount, Market, Quote, RiskSnapshot, Side, TradeTicket, TradingPolicy } from "./types.js";
 
 function finite(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
-export function accountRisk(account: ChallengeAccount) {
-  return account.risk ?? account.risk_snapshot ?? {};
+export function accountRisk(account: ChallengeAccount): RiskSnapshot {
+  const risk = account.risk ?? account.risk_snapshot ?? {};
+  return {
+    ...risk,
+    max_drawdown_floor: risk.max_drawdown_floor ?? risk.max_loss_floor,
+    max_drawdown_room: risk.max_drawdown_room ?? risk.max_loss_room,
+    remaining_profit: risk.remaining_profit ?? risk.remaining_profit_target,
+    // Preserve the first beta field names for older sandbox responses and existing views.
+    max_loss_floor: risk.max_loss_floor ?? risk.max_drawdown_floor,
+    max_loss_room: risk.max_loss_room ?? risk.max_drawdown_room,
+    remaining_profit_target: risk.remaining_profit_target ?? risk.remaining_profit,
+  };
+}
+
+function clamp(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value));
+}
+
+export function accountRuleProgress(account: ChallengeAccount) {
+  const risk = accountRisk(account);
+  const startingBalance = finite(account.starting_balance);
+  const requirement = risk.requirements ?? {};
+  const amountFromPercent = (percent: unknown) => {
+    const pct = finite(percent);
+    return startingBalance !== undefined && pct !== undefined ? startingBalance * pct / 100 : undefined;
+  };
+  const lossRule = (limitPct: unknown, floor: unknown, room: unknown) => {
+    const pct = finite(limitPct);
+    const limitAmount = amountFromPercent(pct);
+    const currentRoom = finite(room);
+    const usedAmount = limitAmount !== undefined && currentRoom !== undefined
+      ? clamp(limitAmount - currentRoom, 0, limitAmount)
+      : undefined;
+    return {
+      limitPct: pct,
+      limitAmount,
+      floor: finite(floor),
+      room: currentRoom,
+      usedAmount,
+      usedPercent: limitAmount && usedAmount !== undefined ? usedAmount / limitAmount * 100 : undefined,
+    };
+  };
+  const profitTargetPct = finite(requirement.profit_target_pct);
+  const profitTargetAmount = amountFromPercent(profitTargetPct);
+  const remainingProfit = finite(risk.remaining_profit);
+  const achievedAmount = profitTargetAmount !== undefined && remainingProfit !== undefined
+    ? clamp(profitTargetAmount - remainingProfit, 0, profitTargetAmount)
+    : undefined;
+  return {
+    profit: {
+      targetPct: profitTargetPct,
+      targetAmount: profitTargetAmount,
+      remaining: remainingProfit,
+      achievedAmount,
+      achievedPercent: profitTargetAmount && achievedAmount !== undefined ? achievedAmount / profitTargetAmount * 100 : undefined,
+    },
+    dailyLoss: lossRule(requirement.daily_loss_pct, risk.daily_loss_floor, risk.daily_loss_room),
+    maxDrawdown: lossRule(requirement.max_drawdown_pct, risk.max_drawdown_floor, risk.max_drawdown_room),
+  };
 }
 
 export function guardAccount(
@@ -30,7 +87,7 @@ export function guardAccount(
   if (requestedRisk > maxRisk) problems.push(`Requested risk $${requestedRisk} exceeds your $${maxRisk} cap.`);
 
   const dailyRoom = finite(risk.daily_loss_room);
-  const maxRoom = finite(risk.max_loss_room);
+  const maxRoom = finite(risk.max_drawdown_room);
   const limitingRoom = Math.min(dailyRoom ?? Infinity, maxRoom ?? Infinity);
   if (Number.isFinite(limitingRoom)) {
     const allowed = limitingRoom * (maxLossRoomUsagePercent / 100);

@@ -11,7 +11,7 @@ describe("daily Guardian controls", () => {
     expect(automaticLockReason(user, -225)).toBe("Daily loss limit reached");
   });
   it("raises risk bands as remaining room contracts", () => {
-    expect(riskBand({ id: "a", risk: { daily_loss_room: 140, max_loss_room: 500 } }, 75)).toBe("warning");
-    expect(riskBand({ id: "a", risk: { daily_loss_room: 70, max_loss_room: 500 } }, 75)).toBe("critical");
+    expect(riskBand({ id: "a", risk: { daily_loss_room: 140, max_drawdown_room: 500 } }, 75)).toBe("warning");
+    expect(riskBand({ id: "a", risk: { daily_loss_room: 70, max_drawdown_room: 500 } }, 75)).toBe("critical");
   });
 });

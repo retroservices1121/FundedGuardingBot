@@ -7,7 +7,7 @@ import { SecretBox } from "./crypto.js";
 import { Database } from "./db.js";
 import { MfpClient, MfpError } from "./mfp.js";
 import { accountDailyPnl, automaticLockReason } from "./guardian.js";
-import { accountRisk, buildTicket, calculateSize, guardAccount } from "./risk.js";
+import { accountRisk, accountRuleProgress, buildTicket, calculateSize, guardAccount } from "./risk.js";
 import { createClosedPositionShareCard } from "./share-card.js";
 import { validateTelegramInitData, type TelegramMiniAppUser } from "./telegram-auth.js";
 import type { Market, PositionView, Side } from "./types.js";
@@ -179,6 +179,7 @@ export function startMiniAppServer(config: Config, db: Database) {
       workingOrders,
       dailyPnl,
       autoLockReason,
+      ruleProgress: accountRuleProgress(state.account),
       markets,
       dryRun: config.DRY_RUN,
     };
@@ -394,11 +395,13 @@ export function startMiniAppServer(config: Config, db: Database) {
     "/app/app-v4.js": { file: "app.js", type: "text/javascript; charset=utf-8" },
     "/app/app-v5.js": { file: "app.js", type: "text/javascript; charset=utf-8" },
     "/app/app-v6.js": { file: "app.js", type: "text/javascript; charset=utf-8" },
+    "/app/app-v7.js": { file: "app.js", type: "text/javascript; charset=utf-8" },
     "/app/styles.css": { file: "styles.css", type: "text/css; charset=utf-8" },
     "/app/styles-v3.css": { file: "styles.css", type: "text/css; charset=utf-8" },
     "/app/styles-v4.css": { file: "styles.css", type: "text/css; charset=utf-8" },
     "/app/styles-v5.css": { file: "styles.css", type: "text/css; charset=utf-8" },
     "/app/styles-v6.css": { file: "styles.css", type: "text/css; charset=utf-8" },
+    "/app/styles-v7.css": { file: "styles.css", type: "text/css; charset=utf-8" },
   };
 
   const server = createServer(async (request, response) => {

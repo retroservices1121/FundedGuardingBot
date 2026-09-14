@@ -5,9 +5,9 @@
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
   <meta name="theme-color" content="#07100c">
   <title>Funded Guardian</title>
-  <link rel="stylesheet" href="/app/styles-v6.css">
+  <link rel="stylesheet" href="/app/styles-v7.css">
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
-  <script src="/app/app-v6.js" defer></script>
+  <script src="/app/app-v7.js" defer></script>
 </head>
 <body>
   <div class="shell">
@@ -44,35 +44,30 @@
     <main>
       <section class="view active" data-view="home">
         <div class="welcome"><span id="greeting">Your challenge</span><select id="accountSelect" aria-label="Challenge account"></select></div>
-        <article class="safety-card" id="safetyCard">
-          <div><span class="eyebrow">ACCOUNT GUARDIAN</span><h1 id="safetyTitle">Checking your account…</h1><p id="safetyText">Loading current rules and loss limits.</p></div>
-          <span class="status-orb"></span>
-        </article>
+        <article class="guardian-alert" id="guardianAlert" hidden><span>!</span><div><strong id="safetyTitle">Guardian warning</strong><p id="safetyText">New exposure is not recommended.</p></div></article>
         <article class="balance-card">
           <span class="eyebrow">CURRENT EQUITY</span>
           <div class="balance-row"><strong id="equity">—</strong><span id="accountStatus">—</span></div>
-          <div class="progress-label"><span>Challenge progress</span><span id="progressText">—</span></div>
+          <div class="progress-label"><span>Profit target progress</span><span id="progressText">—</span></div>
           <div class="progress"><i id="progressBar"></i></div>
+          <div class="rule-values profit-values"><div><span>Account target</span><strong id="profitTargetLimit">—</strong></div><div><span>Still required</span><strong id="profitRemaining">—</strong></div></div>
         </article>
+        <div class="rule-stack">
+          <article class="rule-card" id="dailyRuleCard">
+            <div class="rule-head"><div><span class="eyebrow">DAILY LOSS</span><strong>Daily loss floor</strong></div><span id="dailyUsed">—</span></div>
+            <div class="risk-progress"><i id="dailyRiskBar"></i></div>
+            <div class="rule-values"><div><span>Loss limit</span><strong id="dailyLimit">—</strong></div><div><span>Equity floor</span><strong id="dailyFloor">—</strong></div><div><span>Room remaining</span><strong id="dailyRoom">—</strong></div></div>
+          </article>
+          <article class="rule-card" id="drawdownRuleCard">
+            <div class="rule-head"><div><span class="eyebrow">ACCOUNT DRAWDOWN</span><strong>Maximum drawdown</strong></div><span id="drawdownUsed">—</span></div>
+            <div class="risk-progress"><i id="drawdownRiskBar"></i></div>
+            <div class="rule-values"><div><span>Drawdown limit</span><strong id="drawdownLimit">—</strong></div><div><span>Equity floor</span><strong id="drawdownFloor">—</strong></div><div><span>Room remaining</span><strong id="maxRoom">—</strong></div></div>
+          </article>
+        </div>
         <div class="metric-grid">
-          <article><span>Daily loss room</span><strong id="dailyRoom">—</strong></article>
-          <article><span>Maximum loss room</span><strong id="maxRoom">—</strong></article>
           <article><span>Available balance</span><strong id="available">—</strong></article>
           <article><span>Open exposure</span><strong id="exposure">—</strong></article>
         </div>
-        <article class="control-card">
-          <div><span class="eyebrow">DAILY CONTROL</span><strong id="lockTitle">Trading is available</strong><p id="dailyControlText">Use the lock when you have reached today’s goal.</p></div>
-          <button class="secondary" id="lockButton">Lock today</button>
-        </article>
-        <article class="guardian-settings">
-          <div><span class="eyebrow">AUTOMATIC GUARD</span><strong>Daily lockouts & alerts</strong><p>Optional limits apply to trades placed through Guardian.</p></div>
-          <div class="settings-grid">
-            <label>Lock after profit<input id="profitLock" inputmode="decimal" type="number" min="10" placeholder="Off"></label>
-            <label>Lock after loss<input id="lossLock" inputmode="decimal" type="number" min="10" placeholder="Off"></label>
-          </div>
-          <label class="toggle-row"><input id="alertsEnabled" type="checkbox" checked><span>Telegram position and risk alerts</span></label>
-          <button class="secondary wide" id="saveGuardian">Save Guardian controls</button>
-        </article>
       </section>
 
       <section class="view" data-view="markets">
@@ -138,15 +133,30 @@
       </section>
 
       <section class="view" data-view="positions">
-        <div class="section-title"><div><span class="eyebrow">CURRENT EXPOSURE</span><h2>Positions</h2></div><span class="count" id="positionCount">0</span></div>
+        <div class="section-title"><div><span class="eyebrow">TRADING ACTIVITY</span><h2>Activity</h2></div><span class="count" id="positionCount">0 OPEN</span></div>
         <div id="positionsList" class="stack"></div>
         <div class="section-title sub-section"><div><span class="eyebrow">PENDING EXECUTION</span><h2>Working orders</h2></div><span class="count" id="orderCount">0</span></div>
         <div id="ordersList" class="stack"></div>
+        <div class="section-title sub-section"><div><span class="eyebrow">RECENT RESULTS</span><h2>Closed positions</h2></div></div>
+        <div id="historyList" class="stack"></div>
       </section>
 
-      <section class="view" data-view="history">
-        <div class="section-title"><div><span class="eyebrow">RECENT RESULTS</span><h2>History</h2></div></div>
-        <div id="historyList" class="stack"></div>
+      <section class="view" data-view="settings">
+        <div class="section-title"><div><span class="eyebrow">GUARDIAN PREFERENCES</span><h2>Settings</h2></div></div>
+        <article class="connection-card"><div><span class="eyebrow">MYFUNDEDPERPS CONNECTION</span><strong id="connectionLabel">Connected</strong><p id="connectionDetail">API key secured</p></div><span class="connection-dot"></span></article>
+        <article class="control-card">
+          <div><span class="eyebrow">DAILY CONTROL</span><strong id="lockTitle">Trading is available</strong><p id="dailyControlText">Use the lock when you have reached today’s goal.</p></div>
+          <button class="secondary" id="lockButton">Lock today</button>
+        </article>
+        <article class="guardian-settings">
+          <div><span class="eyebrow">AUTOMATIC GUARD</span><strong>Daily lockouts</strong><p>Optional limits apply to new trades placed through Guardian. They never close positions automatically.</p></div>
+          <div class="settings-grid">
+            <label>Lock after profit<input id="profitLock" inputmode="decimal" type="number" min="10" placeholder="Off"></label>
+            <label>Lock after loss<input id="lossLock" inputmode="decimal" type="number" min="10" placeholder="Off"></label>
+          </div>
+          <label class="toggle-row"><input id="alertsEnabled" type="checkbox" checked><span>Telegram position and risk alerts</span></label>
+          <button class="secondary wide" id="saveGuardian">Save Guardian controls</button>
+        </article>
       </section>
     </main>
 
@@ -154,8 +164,8 @@
       <button class="active" data-tab="home"><i>⌂</i><span>Home</span></button>
       <button data-tab="markets"><i>⌁</i><span>Markets</span></button>
       <button data-tab="trade"><i>↗</i><span>Trade</span></button>
-      <button data-tab="positions"><i>◎</i><span>Positions</span></button>
-      <button data-tab="history"><i>◷</i><span>History</span></button>
+      <button data-tab="positions"><i>◎</i><span>Activity</span></button>
+      <button data-tab="settings"><i>⚙</i><span>Settings</span></button>
     </nav>
   </div>
 

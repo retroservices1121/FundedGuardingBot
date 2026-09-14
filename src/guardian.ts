@@ -1,5 +1,6 @@
 import type { ChallengeAccount } from "./types.js";
 import type { UserProfile } from "./db.js";
+import { accountRisk } from "./risk.js";
 
 function finite(value: unknown) {
   const number = Number(value);
@@ -7,7 +8,7 @@ function finite(value: unknown) {
 }
 
 export function accountDailyPnl(account: ChallengeAccount) {
-  const risk = account.risk ?? account.risk_snapshot ?? {};
+  const risk = accountRisk(account);
   const equity = finite(risk.equity);
   const explicitStart = finite(risk.start_of_day_equity ?? risk.daily_start_equity ?? risk.day_start_equity);
   const floor = finite(risk.daily_loss_floor);
@@ -25,8 +26,8 @@ export function automaticLockReason(user: UserProfile, dailyPnl: number | undefi
 }
 
 export function riskBand(account: ChallengeAccount, riskUsd: number) {
-  const risk = account.risk ?? account.risk_snapshot ?? {};
-  const room = Math.min(...[finite(risk.daily_loss_room), finite(risk.max_loss_room)].filter((value): value is number => value !== undefined));
+  const risk = accountRisk(account);
+  const room = Math.min(...[finite(risk.daily_loss_room), finite(risk.max_drawdown_room)].filter((value): value is number => value !== undefined));
   if (!Number.isFinite(room)) return "normal";
   if (room <= riskUsd) return "critical";
   if (room <= riskUsd * 2) return "warning";

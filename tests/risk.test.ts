@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildTicket, calculateSize, guardAccount } from "../src/risk.js";
+import { accountRisk, accountRuleProgress, buildTicket, calculateSize, guardAccount } from "../src/risk.js";
 
 describe("risk sizing", () => {
   it("sizes from dollars at risk and rounds down", () => {
@@ -23,6 +23,30 @@ describe("risk sizing", () => {
 });
 
 describe("guardian", () => {
+  it("normalizes official drawdown and profit field names", () => {
+    const risk = accountRisk({ id: "a", risk: { max_drawdown_room: 4_500, remaining_profit: 2_000 } });
+    expect(risk.max_loss_room).toBe(4_500);
+    expect(risk.remaining_profit_target).toBe(2_000);
+  });
+
+  it("calculates each account rule against its own requirements", () => {
+    const progress = accountRuleProgress({
+      id: "a",
+      starting_balance: 100_000,
+      risk: {
+        remaining_profit: 4_580,
+        daily_loss_floor: 98_000,
+        daily_loss_room: 1_500,
+        max_drawdown_floor: 94_000,
+        max_drawdown_room: 4_500,
+        requirements: { profit_target_pct: 8, daily_loss_pct: 3, max_drawdown_pct: 6 },
+      },
+    });
+    expect(progress.profit).toMatchObject({ targetAmount: 8_000, achievedAmount: 3_420, achievedPercent: 42.75 });
+    expect(progress.dailyLoss).toMatchObject({ limitAmount: 3_000, usedAmount: 1_500, usedPercent: 50 });
+    expect(progress.maxDrawdown).toMatchObject({ limitAmount: 6_000, usedAmount: 1_500, usedPercent: 25 });
+  });
+
   it("blocks excessive risk and policy restrictions", () => {
     const problems = guardAccount(
       { id: "a", status: "active", risk: { daily_loss_room: 300, max_loss_room: 1_000 } },

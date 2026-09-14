@@ -29,7 +29,9 @@ The repository now includes a mobile-first Telegram Mini App served by the same 
 - Telegram-signed Mini App authentication
 - Live public MyFundedPerps price streaming and lightweight chart
 - Dedicated live Markets tab with search, favorites, category filters, 24-hour movers, volume, and protected long/short shortcuts
-- Mini App account overview, loss-room controls, open positions, history, and share downloads
+- Mini App account overview with per-account profit-target, daily-loss-floor, and maximum-drawdown progress
+- Activity view combining open positions, working orders, closed history, and share downloads
+- Settings view for manual/automatic daily locks and Telegram alerts
 - Protected quote and confirmation flow shared with the bot's risk policy
 - Complete working-order view with confirmed order cancellation
 - Position chart overlays for entry, take-profit, and stop-loss levels

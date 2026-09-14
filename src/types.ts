@@ -6,10 +6,20 @@ export interface RiskSnapshot {
   available_balance?: number | null;
   gross_exposure?: number | null;
   daily_loss_floor?: number | null;
+  max_drawdown_floor?: number | null;
   max_loss_floor?: number | null;
   daily_loss_room?: number | null;
+  max_drawdown_room?: number | null;
   max_loss_room?: number | null;
+  remaining_profit?: number | null;
   remaining_profit_target?: number | null;
+  requirements?: {
+    daily_loss_pct?: number | null;
+    max_drawdown_pct?: number | null;
+    profit_target_pct?: number | null;
+    consistency_pct?: number | null;
+    minimum_trading_days?: number | null;
+  };
   marks_complete?: boolean;
   [key: string]: unknown;
 }
