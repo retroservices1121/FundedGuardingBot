@@ -443,6 +443,7 @@ export function startMiniAppServer(config: Config, db: Database) {
     "/app/styles-v11.css": { file: "styles.css", type: "text/css; charset=utf-8" },
     "/app/styles-v12.css": { file: "styles.css", type: "text/css; charset=utf-8" },
     "/app/styles-v13.css": { file: "styles.css", type: "text/css; charset=utf-8" },
+    "/app/styles-v14.css": { file: "styles.css", type: "text/css; charset=utf-8" },
   };
 
   const server = createServer(async (request, response) => {
