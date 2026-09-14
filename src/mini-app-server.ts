@@ -4,7 +4,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import type { Config } from "./config.js";
 import { SecretBox } from "./crypto.js";
-import { Database, type UserProfile } from "./db.js";
+import { Database } from "./db.js";
 import { MfpClient, MfpError } from "./mfp.js";
 import { accountRisk, buildTicket, calculateSize, guardAccount } from "./risk.js";
 import { createClosedPositionShareCard } from "./share-card.js";
@@ -53,10 +53,6 @@ function marketCoin(market: Market) {
 
 function marketProvider(market: Market) {
   return String(market.provider ?? market.id.split("|")[0] ?? "binance");
-}
-
-function activeSubscription(user: UserProfile) {
-  return user.plan === "pro" || (user.plan === "trial" && user.trialEndsAt.getTime() > Date.now());
 }
 
 export function startMiniAppServer(config: Config, db: Database) {
@@ -142,15 +138,12 @@ export function startMiniAppServer(config: Config, db: Database) {
       state.user.maxRiskUsd,
       state.user.maxLossRoomUsagePercent,
     );
-    if (!activeSubscription(state.user)) problems.unshift("Your trial has ended.");
     if (state.user.lockedUntil && state.user.lockedUntil.getTime() > Date.now()) problems.unshift("Trading is locked until 00:00 UTC.");
 
     return {
       user: {
         firstName: state.telegram.first_name,
         username: state.telegram.username,
-        plan: state.user.plan,
-        trialEndsAt: state.user.trialEndsAt,
         riskUsd: state.user.riskUsd,
         maxRiskUsd: state.user.maxRiskUsd,
         stopPercent: state.user.stopPercent,
@@ -187,7 +180,6 @@ export function startMiniAppServer(config: Config, db: Database) {
     if (!Number.isFinite(requestedRisk) || requestedRisk <= 0 || requestedRisk > state.user.maxRiskUsd) {
       throw new Error(`Risk must be between $1 and $${state.user.maxRiskUsd}.`);
     }
-    if (!activeSubscription(state.user)) throw new Error("Your trial has ended.");
     if (state.user.lockedUntil && state.user.lockedUntil.getTime() > Date.now()) throw new Error("Trading is locked until 00:00 UTC.");
     const [policy, markets] = await Promise.all([state.client.getTradingPolicy(state.account.id), state.client.listMarkets()]);
     const problems = guardAccount(state.account, policy, requestedRisk, state.user.maxRiskUsd, state.user.maxLossRoomUsagePercent);

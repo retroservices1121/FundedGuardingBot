@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { Bot, Context, InlineKeyboard, InputFile } from "grammy";
 import { miniAppUrl, type Config } from "./config.js";
 import { SecretBox } from "./crypto.js";
-import { Database, type UserProfile } from "./db.js";
+import { Database } from "./db.js";
 import { accountMessage, closedPositionsMessage, positionsMessage, ticketMessage, tradeKeyboard } from "./format.js";
 import { MfpClient, MfpError } from "./mfp.js";
 import { buildTicket, calculateSize, guardAccount } from "./risk.js";
@@ -30,10 +30,6 @@ function findMarket(markets: Market[], wanted: string) {
     return market.available !== false && (symbol === upper || symbol.startsWith(`${upper}USD`) || symbol.startsWith(`${upper}USDT`));
   });
   return candidates.find((market) => market.id.startsWith("binance|")) ?? candidates[0];
-}
-
-function activeSubscription(user: UserProfile) {
-  return user.plan === "pro" || (user.plan === "trial" && user.trialEndsAt.getTime() > Date.now());
 }
 
 export function createGuardianBot(config: Config, db: Database) {
@@ -91,7 +87,7 @@ export function createGuardianBot(config: Config, db: Database) {
     else keyboard.text("Connect MyFundedPerps", "connect");
     await ctx.reply(connection
       ? `🛡 Welcome back to Funded Guardian.\n\nConnected: ${connection.environment} key ••••${connection.keyLastFour}`
-      : "🛡 Funded Guardian protects your challenge before every trade.\n\nOpen the Mini App for instructions to connect your MyFundedPerps account. New accounts receive a 7-day test period.", { reply_markup: keyboard });
+      : "🛡 Funded Guardian protects your challenge before every trade.\n\nOpen the free Mini App for instructions to connect your MyFundedPerps account.", { reply_markup: keyboard });
   });
 
   bot.command("app", async (ctx) => {
@@ -249,7 +245,6 @@ export function createGuardianBot(config: Config, db: Database) {
 
   async function showTrade(ctx: Context) {
     const user = await ensureUser(ctx);
-    if (!activeSubscription(user)) return void (await ctx.reply("Your trial has ended. Subscription checkout is not enabled in this beta."));
     if (user.lockedUntil && user.lockedUntil.getTime() > Date.now()) return void (await ctx.reply("🔒 Trading is locked until 00:00 UTC."));
     if (!(await db.getConnection(user.telegramId))) return void (await ctx.reply("Connect MyFundedPerps first with /connect."));
     await ctx.reply(`Choose a protected trade. Risk preset: $${user.riskUsd}.`, { reply_markup: tradeKeyboard() });
@@ -272,7 +267,6 @@ export function createGuardianBot(config: Config, db: Database) {
     const side = ctx.match[2]! as Side;
     try {
       const { user, account, client } = await selectedAccount(ctx);
-      if (!activeSubscription(user)) throw new Error("Your trial has ended.");
       if (user.lockedUntil && user.lockedUntil.getTime() > Date.now()) throw new Error("Trading is locked until 00:00 UTC.");
       const [policy, markets] = await Promise.all([client.getTradingPolicy(account.id), client.listMarkets()]);
       const problems = guardAccount(account, policy, user.riskUsd, user.maxRiskUsd, user.maxLossRoomUsagePercent);

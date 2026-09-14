@@ -7,8 +7,6 @@ export interface UserProfile {
   telegramId: number;
   username?: string;
   firstName?: string;
-  plan: "trial" | "pro" | "suspended";
-  trialEndsAt: Date;
   onboardingState?: string;
   selectedAccountId?: string;
   riskUsd: number;
@@ -39,8 +37,6 @@ export class Database {
         telegram_id BIGINT PRIMARY KEY,
         username TEXT,
         first_name TEXT,
-        plan TEXT NOT NULL DEFAULT 'trial',
-        trial_ends_at TIMESTAMPTZ NOT NULL DEFAULT (NOW() + INTERVAL '7 days'),
         onboarding_state TEXT,
         selected_account_id TEXT,
         risk_usd NUMERIC NOT NULL DEFAULT 75,
@@ -86,7 +82,7 @@ export class Database {
     if (!row) throw new Error("User profile not found.");
     return {
       telegramId: Number(row.telegram_id), username: row.username ?? undefined, firstName: row.first_name ?? undefined,
-      plan: row.plan, trialEndsAt: row.trial_ends_at, onboardingState: row.onboarding_state ?? undefined,
+      onboardingState: row.onboarding_state ?? undefined,
       selectedAccountId: row.selected_account_id ?? undefined, riskUsd: Number(row.risk_usd),
       maxRiskUsd: Number(row.max_risk_usd), stopPercent: Number(row.stop_percent),
       rewardRisk: Number(row.reward_risk), leverage: Number(row.leverage),

@@ -1,6 +1,6 @@
 # Funded Guardian Bot
 
-Customer-ready Telegram SaaS foundation for MyFundedPerps challenge accounts. Every Telegram user can connect an individual API key, select an account, save personal risk settings, and create a confirmed protected trade.
+Free multi-user Telegram guardian for MyFundedPerps challenge accounts. Every Telegram user can connect an individual API key, select an account, save personal risk settings, and create a confirmed protected trade.
 
 The repository now includes a mobile-first Telegram Mini App served by the same Railway service. The bot remains the alert and onboarding layer; the Mini App provides the visual Guardian, trading, positions, and history experience.
 
@@ -14,10 +14,9 @@ The repository now includes a mobile-first Telegram Mini App served by the same 
 6. Guardian checks the account risk snapshot and effective policy, calculates size from dollars at risk, requests a size-aware quote, and shows a short-lived confirmation.
 7. Confirmation either completes a dry run or submits a market order with attached TP/SL.
 
-## SaaS capabilities included
+## Multi-user capabilities included
 
 - Isolated Telegram user profiles
-- Seven-day trial state and plan field (`trial`, `pro`, or `suspended`)
 - Per-user encrypted MyFundedPerps credentials
 - Sandbox/live environment isolation
 - Per-user account selection and risk settings
@@ -32,7 +31,7 @@ The repository now includes a mobile-first Telegram Mini App served by the same 
 - Mini App account overview, loss-room controls, open positions, history, and share downloads
 - Protected quote and confirmation flow shared with the bot's risk policy
 
-Payment checkout is deliberately not connected yet. Trial expiration is enforced, and the database is ready for a billing webhook to set `plan='pro'`.
+Funded Guardian is free to use. There are no trials, subscriptions, pricing tiers, or payment checkout.
 
 ## Local setup
 
