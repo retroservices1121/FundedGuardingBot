@@ -65,4 +65,10 @@ describe("guardian", () => {
       {}, 75, 100, 20,
     )).toEqual([]);
   });
+
+  it("can warn without enforcing user-configured limits", () => {
+    const account = { id: "a", status: "active", risk: { daily_loss_room: 325, max_drawdown_room: 2_000 } } as const;
+    expect(guardAccount(account, {}, 100, 100, 20)).toContain("Risk exceeds 20% of remaining loss room ($65.00).");
+    expect(guardAccount(account, {}, 100, 100, 20, false)).toEqual([]);
+  });
 });

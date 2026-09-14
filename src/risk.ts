@@ -71,6 +71,7 @@ export function guardAccount(
   requestedRisk: number,
   maxRisk: number,
   maxLossRoomUsagePercent: number,
+  enforceUserLimits = true,
 ): string[] {
   const problems: string[] = [];
   const risk = accountRisk(account);
@@ -84,18 +85,24 @@ export function guardAccount(
   if (policy.copy_follower_locked || policy.copy_scope_blocked) problems.push("Copy-trading policy blocks this order.");
   if (policy.trading_halt?.platform) problems.push("The platform is under a trading halt.");
   if (policy.restriction?.restriction === "reduce_only") problems.push("Account is reduce-only.");
-  if (requestedRisk > maxRisk) problems.push(`Requested risk $${requestedRisk} exceeds your $${maxRisk} cap.`);
+  if (enforceUserLimits && requestedRisk > maxRisk) problems.push(`Requested risk $${requestedRisk} exceeds your $${maxRisk} cap.`);
 
-  const dailyRoom = finite(risk.daily_loss_room);
-  const maxRoom = finite(risk.max_drawdown_room);
-  const limitingRoom = Math.min(dailyRoom ?? Infinity, maxRoom ?? Infinity);
-  if (Number.isFinite(limitingRoom)) {
-    const allowed = limitingRoom * (maxLossRoomUsagePercent / 100);
-    if (requestedRisk > allowed) {
-      problems.push(`Risk exceeds ${maxLossRoomUsagePercent}% of remaining loss room ($${allowed.toFixed(2)}).`);
+  const allowed = riskAllowance(account, maxRisk, maxLossRoomUsagePercent);
+  if (enforceUserLimits && allowed.limitingRoom !== undefined) {
+    if (requestedRisk > allowed.allowedRisk) {
+      problems.push(`Risk exceeds ${maxLossRoomUsagePercent}% of remaining loss room ($${allowed.allowedRisk.toFixed(2)}).`);
     }
   }
   return problems;
+}
+
+export function riskAllowance(account: ChallengeAccount, maxRisk: number, maxLossRoomUsagePercent: number) {
+  const risk = accountRisk(account);
+  const rooms = [finite(risk.daily_loss_room), finite(risk.max_drawdown_room)]
+    .filter((value): value is number => value !== undefined);
+  const limitingRoom = rooms.length ? Math.min(...rooms) : undefined;
+  const roomAllowance = limitingRoom === undefined ? maxRisk : limitingRoom * maxLossRoomUsagePercent / 100;
+  return { limitingRoom, allowedRisk: Math.max(0, Math.min(maxRisk, roomAllowance)) };
 }
 
 export function calculateSize(

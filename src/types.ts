@@ -142,5 +142,6 @@ export interface TradeTicket {
   estimatedNotional: number;
   estimatedFee?: number;
   leverage: number;
+  guardianWarning?: string;
   expiresAt: number;
 }

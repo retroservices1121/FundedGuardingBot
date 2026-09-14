@@ -5,9 +5,9 @@
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
   <meta name="theme-color" content="#07100c">
   <title>Funded Guardian</title>
-  <link rel="stylesheet" href="/app/styles-v9.css">
+  <link rel="stylesheet" href="/app/styles-v10.css">
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
-  <script src="/app/app-v9.js" defer></script>
+  <script src="/app/app-v10.js" defer></script>
 </head>
 <body>
   <div class="shell">
@@ -128,6 +128,8 @@
         <article class="ticket-control">
           <div class="label-row"><span>Risk at stop</span><strong id="riskValue">$75</strong></div>
           <div class="risk-options" id="riskOptions"></div>
+          <div class="custom-risk"><label for="customRisk">Custom risk</label><div><span>$</span><input id="customRisk" type="number" inputmode="decimal" min="1" step="0.01" placeholder="65"><button id="applyCustomRisk" type="button">Use amount</button></div></div>
+          <p class="risk-allowance" id="riskAllowance">Checking your current Guardian allowance…</p>
           <div class="trade-summary">
             <div><span>Stop distance</span><strong id="stopValue">—</strong></div>
             <div><span>Reward / risk</span><strong id="rewardValue">—</strong></div>
@@ -159,9 +161,13 @@
           <div class="settings-grid">
             <label>Lock after profit<input id="profitLock" inputmode="decimal" type="number" min="10" placeholder="Off"></label>
             <label>Lock after loss<input id="lossLock" inputmode="decimal" type="number" min="10" placeholder="Off"></label>
+            <label class="full-setting">Maximum risk per trade<input id="maxTradeRisk" inputmode="decimal" type="number" min="1" max="100000" step="1"><small>Your personal dollar-risk threshold. This is editable at any time.</small></label>
+            <label class="full-setting">Maximum loss-room use<input id="lossRoomPercent" inputmode="decimal" type="number" min="5" max="100" step="1"><small>Percent of the smaller daily-loss or drawdown room that one trade may risk.</small></label>
           </div>
+          <label class="toggle-row"><input id="enforceGuardrails" type="checkbox" checked><span>Block trades outside my risk settings</span></label>
           <label class="toggle-row"><input id="alertsEnabled" type="checkbox" checked><span>Telegram position and risk alerts</span></label>
           <button class="secondary wide" id="saveGuardian">Save Guardian controls</button>
+          <p class="settings-disclaimer">Funded Guardian provides user-configured risk tools and account information—not financial or trading advice. You control your settings and every trading decision. Guardrails cannot guarantee that a challenge will pass or prevent losses.</p>
         </article>
       </section>
     </main>

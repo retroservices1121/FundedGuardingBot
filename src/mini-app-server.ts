@@ -7,7 +7,7 @@ import { SecretBox } from "./crypto.js";
 import { Database } from "./db.js";
 import { MfpClient, MfpError } from "./mfp.js";
 import { accountDailyPnl, automaticLockReason } from "./guardian.js";
-import { accountRisk, accountRuleProgress, buildTicket, calculateSize, guardAccount } from "./risk.js";
+import { accountRisk, accountRuleProgress, buildTicket, calculateSize, guardAccount, riskAllowance } from "./risk.js";
 import { createClosedPositionShareCard } from "./share-card.js";
 import { validateTelegramInitData, type TelegramMiniAppUser } from "./telegram-auth.js";
 import type { Market, PositionView, Side } from "./types.js";
@@ -140,6 +140,7 @@ export function startMiniAppServer(config: Config, db: Database) {
       state.user.riskUsd,
       state.user.maxRiskUsd,
       state.user.maxLossRoomUsagePercent,
+      state.user.enforceGuardrails,
     );
     const dailyPnl = accountDailyPnl(state.account);
     const autoLockReason = automaticLockReason(state.user, dailyPnl);
@@ -153,6 +154,8 @@ export function startMiniAppServer(config: Config, db: Database) {
         username: state.telegram.username,
         riskUsd: state.user.riskUsd,
         maxRiskUsd: state.user.maxRiskUsd,
+        maxLossRoomUsagePercent: state.user.maxLossRoomUsagePercent,
+        enforceGuardrails: state.user.enforceGuardrails,
         stopPercent: state.user.stopPercent,
         rewardRisk: state.user.rewardRisk,
         leverage: state.user.leverage,
@@ -191,8 +194,8 @@ export function startMiniAppServer(config: Config, db: Database) {
     const side = payload.side === "buy" || payload.side === "sell" ? payload.side : undefined;
     const requestedRisk = Number(payload.riskUsd ?? state.user.riskUsd);
     if (!side || !marketId) throw new Error("Choose a market and a direction.");
-    if (!Number.isFinite(requestedRisk) || requestedRisk <= 0 || requestedRisk > state.user.maxRiskUsd) {
-      throw new Error(`Risk must be between $1 and $${state.user.maxRiskUsd}.`);
+    if (!Number.isFinite(requestedRisk) || requestedRisk <= 0 || requestedRisk > 100_000) {
+      throw new Error("Risk must be between $1 and $100,000.");
     }
     const autoLockReason = automaticLockReason(state.user, accountDailyPnl(state.account));
     if (autoLockReason) {
@@ -201,7 +204,7 @@ export function startMiniAppServer(config: Config, db: Database) {
     }
     if (state.user.lockedUntil && state.user.lockedUntil.getTime() > Date.now()) throw new Error("Trading is locked until the next New York trading day.");
     const [policy, markets] = await Promise.all([state.client.getTradingPolicy(state.account.id), state.client.listMarkets()]);
-    const problems = guardAccount(state.account, policy, requestedRisk, state.user.maxRiskUsd, state.user.maxLossRoomUsagePercent);
+    const problems = guardAccount(state.account, policy, requestedRisk, state.user.maxRiskUsd, state.user.maxLossRoomUsagePercent, state.user.enforceGuardrails);
     if (problems.length) throw new Error(problems.join(" "));
     const market = markets.find(item => item.id === marketId && item.available !== false);
     if (!market) throw new Error("That market is not currently available.");
@@ -225,6 +228,12 @@ export function startMiniAppServer(config: Config, db: Database) {
       leverage: state.user.leverage,
       ttlSeconds: config.CONFIRMATION_TTL_SECONDS,
     });
+    if (!state.user.enforceGuardrails) {
+      const allowance = riskAllowance(state.account, state.user.maxRiskUsd, state.user.maxLossRoomUsagePercent);
+      if (requestedRisk > allowance.allowedRisk) {
+        ticket.guardianWarning = `This trade risks $${requestedRisk.toFixed(2)}, above your configured Guardian limit of $${allowance.allowedRisk.toFixed(2)}. Warnings-only mode is enabled.`;
+      }
+    }
     if (policy.limits?.max_position_value_usd && ticket.estimatedNotional > policy.limits.max_position_value_usd) {
       throw new Error("Estimated notional exceeds the account policy cap.");
     }
@@ -279,7 +288,8 @@ export function startMiniAppServer(config: Config, db: Database) {
       const { user } = await authenticatedUser(request);
       const payload = await body(request);
       const risk = Number(payload.riskUsd);
-      if (!Number.isFinite(risk) || risk <= 0 || risk > user.maxRiskUsd) throw new Error(`Risk must be between $1 and $${user.maxRiskUsd}.`);
+      if (!Number.isFinite(risk) || risk <= 0 || risk > 100_000) throw new Error("Risk must be between $1 and $100,000.");
+      if (user.enforceGuardrails && risk > user.maxRiskUsd) throw new Error(`Risk exceeds your $${user.maxRiskUsd} personal threshold.`);
       await db.updateRisk(user.telegramId, risk);
       return json(response, 200, { riskUsd: risk });
     }
@@ -296,7 +306,16 @@ export function startMiniAppServer(config: Config, db: Database) {
         dailyProfitLockUsd: optionalAmount(payload.dailyProfitLockUsd, "Profit lock"),
         dailyLossLockUsd: optionalAmount(payload.dailyLossLockUsd, "Loss lock"),
         alertsEnabled: payload.alertsEnabled !== false,
+        maxLossRoomUsagePercent: Number(payload.maxLossRoomUsagePercent),
+        maxRiskUsd: Number(payload.maxRiskUsd),
+        enforceGuardrails: payload.enforceGuardrails !== false,
       };
+      if (!Number.isFinite(settings.maxLossRoomUsagePercent) || settings.maxLossRoomUsagePercent < 5 || settings.maxLossRoomUsagePercent > 100) {
+        throw new Error("Maximum loss-room use must be between 5% and 100%.");
+      }
+      if (!Number.isFinite(settings.maxRiskUsd) || settings.maxRiskUsd < 1 || settings.maxRiskUsd > 100_000) {
+        throw new Error("Maximum trade risk must be between $1 and $100,000.");
+      }
       await db.updateGuardianSettings(user.telegramId, settings);
       return json(response, 200, settings);
     }
@@ -398,6 +417,7 @@ export function startMiniAppServer(config: Config, db: Database) {
     "/app/app-v7.js": { file: "app.js", type: "text/javascript; charset=utf-8" },
     "/app/app-v8.js": { file: "app.js", type: "text/javascript; charset=utf-8" },
     "/app/app-v9.js": { file: "app.js", type: "text/javascript; charset=utf-8" },
+    "/app/app-v10.js": { file: "app.js", type: "text/javascript; charset=utf-8" },
     "/app/styles.css": { file: "styles.css", type: "text/css; charset=utf-8" },
     "/app/styles-v3.css": { file: "styles.css", type: "text/css; charset=utf-8" },
     "/app/styles-v4.css": { file: "styles.css", type: "text/css; charset=utf-8" },
@@ -406,6 +426,7 @@ export function startMiniAppServer(config: Config, db: Database) {
     "/app/styles-v7.css": { file: "styles.css", type: "text/css; charset=utf-8" },
     "/app/styles-v8.css": { file: "styles.css", type: "text/css; charset=utf-8" },
     "/app/styles-v9.css": { file: "styles.css", type: "text/css; charset=utf-8" },
+    "/app/styles-v10.css": { file: "styles.css", type: "text/css; charset=utf-8" },
   };
 
   const server = createServer(async (request, response) => {

@@ -228,7 +228,7 @@ export function createGuardianBot(config: Config, db: Database) {
 
   async function showSettings(ctx: Context) {
     const user = await ensureUser(ctx);
-    await ctx.reply(`⚙️ Guardian Settings\n\nRisk per trade: $${user.riskUsd}\nHard cap: $${user.maxRiskUsd}\nStop distance: ${user.stopPercent}%\nReward/risk: ${user.rewardRisk}:1\nLeverage: ${user.leverage}×\nMax loss-room use: ${user.maxLossRoomUsagePercent}%\nProfit lock: ${user.dailyProfitLockUsd ? `$${user.dailyProfitLockUsd}` : "Off"}\nLoss lock: ${user.dailyLossLockUsd ? `$${user.dailyLossLockUsd}` : "Off"}\nTelegram alerts: ${user.alertsEnabled ? "On" : "Off"}\n\nOpen the Mini App to configure automatic controls.`, {
+    await ctx.reply(`⚙️ Guardian Settings\n\nRisk per trade: $${user.riskUsd}\nPersonal threshold: $${user.maxRiskUsd}\nGuardrail mode: ${user.enforceGuardrails ? "Enforced" : "Warnings only"}\nStop distance: ${user.stopPercent}%\nReward/risk: ${user.rewardRisk}:1\nLeverage: ${user.leverage}×\nMax loss-room use: ${user.maxLossRoomUsagePercent}%\nProfit lock: ${user.dailyProfitLockUsd ? `$${user.dailyProfitLockUsd}` : "Off"}\nLoss lock: ${user.dailyLossLockUsd ? `$${user.dailyLossLockUsd}` : "Off"}\nTelegram alerts: ${user.alertsEnabled ? "On" : "Off"}\n\nOpen the Mini App to configure automatic controls.`, {
       reply_markup: new InlineKeyboard().text("Risk $25", "risk:25").text("$50", "risk:50").text("$75", "risk:75").text("$100", "risk:100").row().text("Back", "status"),
     });
   }
@@ -237,7 +237,7 @@ export function createGuardianBot(config: Config, db: Database) {
   bot.callbackQuery(/^risk:(25|50|75|100)$/, async (ctx) => {
     const user = await ensureUser(ctx);
     const risk = Number(ctx.match[1]);
-    if (risk > user.maxRiskUsd) return void (await ctx.answerCallbackQuery({ text: `Your hard cap is $${user.maxRiskUsd}.`, show_alert: true }));
+    if (user.enforceGuardrails && risk > user.maxRiskUsd) return void (await ctx.answerCallbackQuery({ text: `Your personal threshold is $${user.maxRiskUsd}.`, show_alert: true }));
     await db.updateRisk(user.telegramId, risk);
     await ctx.answerCallbackQuery({ text: `Risk set to $${risk}.` });
     await showSettings(ctx);

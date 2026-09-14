@@ -20,6 +20,8 @@ The repository now includes a mobile-first Telegram Mini App served by the same 
 - Per-user encrypted MyFundedPerps credentials
 - Sandbox/live environment isolation
 - Per-user account selection and risk settings
+- Per-user editable loss-room guardrail percentage and exact custom dollar-risk entry
+- User-selectable enforced or warnings-only guardrail behavior
 - Persistent daily locks in PostgreSQL
 - Persistent, single-use expiring trade tickets
 - Credential deletion with `/disconnect`

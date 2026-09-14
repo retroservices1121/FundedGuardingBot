@@ -15,6 +15,7 @@ export interface UserProfile {
   rewardRisk: number;
   leverage: number;
   maxLossRoomUsagePercent: number;
+  enforceGuardrails: boolean;
   dailyProfitLockUsd?: number;
   dailyLossLockUsd?: number;
   alertsEnabled: boolean;
@@ -70,6 +71,7 @@ export class Database {
       ALTER TABLE users ADD COLUMN IF NOT EXISTS daily_profit_lock_usd NUMERIC;
       ALTER TABLE users ADD COLUMN IF NOT EXISTS daily_loss_lock_usd NUMERIC;
       ALTER TABLE users ADD COLUMN IF NOT EXISTS alerts_enabled BOOLEAN NOT NULL DEFAULT TRUE;
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS enforce_guardrails BOOLEAN NOT NULL DEFAULT TRUE;
       CREATE TABLE IF NOT EXISTS guardian_monitor_state (
         telegram_id BIGINT PRIMARY KEY REFERENCES users(telegram_id) ON DELETE CASCADE,
         account_id TEXT NOT NULL,
@@ -101,6 +103,7 @@ export class Database {
       maxRiskUsd: Number(row.max_risk_usd), stopPercent: Number(row.stop_percent),
       rewardRisk: Number(row.reward_risk), leverage: Number(row.leverage),
       maxLossRoomUsagePercent: Number(row.max_loss_room_usage_percent),
+      enforceGuardrails: row.enforce_guardrails !== false,
       dailyProfitLockUsd: row.daily_profit_lock_usd === null ? undefined : Number(row.daily_profit_lock_usd),
       dailyLossLockUsd: row.daily_loss_lock_usd === null ? undefined : Number(row.daily_loss_lock_usd),
       alertsEnabled: row.alerts_enabled !== false, lockedUntil: row.locked_until ?? undefined,
@@ -161,10 +164,10 @@ export class Database {
     return this.pool.query(`UPDATE users SET locked_until=NULL WHERE telegram_id=$1`, [telegramId]);
   }
 
-  async updateGuardianSettings(telegramId: number, settings: { dailyProfitLockUsd?: number; dailyLossLockUsd?: number; alertsEnabled: boolean }) {
+  async updateGuardianSettings(telegramId: number, settings: { dailyProfitLockUsd?: number; dailyLossLockUsd?: number; alertsEnabled: boolean; maxLossRoomUsagePercent: number; maxRiskUsd: number; enforceGuardrails: boolean }) {
     await this.pool.query(
-      `UPDATE users SET daily_profit_lock_usd=$2, daily_loss_lock_usd=$3, alerts_enabled=$4, updated_at=NOW() WHERE telegram_id=$1`,
-      [telegramId, settings.dailyProfitLockUsd ?? null, settings.dailyLossLockUsd ?? null, settings.alertsEnabled],
+      `UPDATE users SET daily_profit_lock_usd=$2, daily_loss_lock_usd=$3, alerts_enabled=$4, max_loss_room_usage_percent=$5, max_risk_usd=$6, enforce_guardrails=$7, updated_at=NOW() WHERE telegram_id=$1`,
+      [telegramId, settings.dailyProfitLockUsd ?? null, settings.dailyLossLockUsd ?? null, settings.alertsEnabled, settings.maxLossRoomUsagePercent, settings.maxRiskUsd, settings.enforceGuardrails],
     );
   }
 
