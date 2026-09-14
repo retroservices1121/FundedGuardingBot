@@ -55,15 +55,6 @@ function marketProvider(market: Market) {
   return String(market.provider ?? market.id.split("|")[0] ?? "binance");
 }
 
-function findMarket(markets: Market[], wanted: string) {
-  const upper = wanted.toUpperCase();
-  const candidates = markets.filter((market) => {
-    const symbol = marketSymbol(market);
-    return market.available !== false && (symbol === upper || symbol.startsWith(`${upper}USD`) || symbol.startsWith(`${upper}USDT`));
-  });
-  return candidates.find((market) => market.id.startsWith("binance|")) ?? candidates[0];
-}
-
 function activeSubscription(user: UserProfile) {
   return user.plan === "pro" || (user.plan === "trial" && user.trialEndsAt.getTime() > Date.now());
 }
@@ -135,20 +126,15 @@ export function startMiniAppServer(config: Config, db: Database) {
       };
     });
 
-    const featured = ["BTC", "ETH", "SOL"].flatMap((symbol) => {
-      const market = findMarket(allMarkets, symbol);
-      return market ? [market] : [];
-    });
-    const markets = await Promise.all(featured.map(async (market) => {
-      const quote = await state.client.getQuote(market.id).catch(() => undefined);
-      return {
+    // Return metadata for every available market without a quote request per row.
+    const markets = allMarkets.filter(market => market.available !== false)
+      .map(market => ({
         id: market.id,
-        symbol: marketSymbol(market).replace(/USDT$|USDC$|USD$/i, ""),
+        symbol: marketSymbol(market),
         coin: marketCoin(market),
         provider: marketProvider(market),
-        price: quote?.mid,
-      };
-    }));
+      }))
+      .sort((a, b) => a.symbol.localeCompare(b.symbol) || a.provider.localeCompare(b.provider));
     const problems = guardAccount(
       state.account,
       policy,
@@ -194,10 +180,10 @@ export function startMiniAppServer(config: Config, db: Database) {
 
   async function createTicket(request: IncomingMessage, payload: Record<string, unknown>) {
     const state = await selectedAccount(request);
-    const symbol = String(payload.symbol ?? "").toUpperCase();
+    const marketId = String(payload.marketId ?? "");
     const side = payload.side === "buy" || payload.side === "sell" ? payload.side : undefined;
     const requestedRisk = Number(payload.riskUsd ?? state.user.riskUsd);
-    if (!side || !["BTC", "ETH", "SOL"].includes(symbol)) throw new Error("Choose BTC, ETH, or SOL and a direction.");
+    if (!side || !marketId) throw new Error("Choose a market and a direction.");
     if (!Number.isFinite(requestedRisk) || requestedRisk <= 0 || requestedRisk > state.user.maxRiskUsd) {
       throw new Error(`Risk must be between $1 and $${state.user.maxRiskUsd}.`);
     }
@@ -206,8 +192,9 @@ export function startMiniAppServer(config: Config, db: Database) {
     const [policy, markets] = await Promise.all([state.client.getTradingPolicy(state.account.id), state.client.listMarkets()]);
     const problems = guardAccount(state.account, policy, requestedRisk, state.user.maxRiskUsd, state.user.maxLossRoomUsagePercent);
     if (problems.length) throw new Error(problems.join(" "));
-    const market = findMarket(markets, symbol);
-    if (!market) throw new Error(`${symbol} is not currently available.`);
+    const market = markets.find(item => item.id === marketId && item.available !== false);
+    if (!market) throw new Error("That market is not currently available.");
+    const symbol = marketSymbol(market);
     const firstQuote = await state.client.getQuote(market.id);
     const precision = market.size_precision ?? market.quantity_precision ?? 6;
     const provisionalSize = calculateSize(requestedRisk, firstQuote.mid, state.user.stopPercent, precision);

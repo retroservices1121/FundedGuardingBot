@@ -46,7 +46,9 @@
 
       <section class="view" data-view="trade">
         <div class="section-title"><div><span class="eyebrow">PROTECTED EXECUTION</span><h2>Trade</h2></div><span class="live-dot">LIVE</span></div>
-        <div class="market-tabs" id="marketTabs"></div>
+        <input id="marketSearch" type="search" placeholder="Search markets or venues" aria-label="Search markets">
+        <select id="marketPicker" aria-label="Trading market"></select>
+        <p id="marketCount" class="fine-print"></p>
         <article class="chart-card">
           <div class="price-head"><div><span id="marketName">BTC / USDT</span><strong id="marketPrice">—</strong></div><span id="streamStatus">Connecting</span></div>
           <canvas id="priceChart"></canvas>
