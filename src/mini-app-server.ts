@@ -340,7 +340,7 @@ export function startMiniAppServer(config: Config, db: Database) {
         const content = await readFile(path.join(publicRoot, asset.file));
         response.writeHead(200, {
           "Content-Type": asset.type,
-          "Cache-Control": asset.file === "index.html" ? "no-cache" : "public, max-age=3600",
+          "Cache-Control": "no-store, max-age=0",
           "Content-Security-Policy": "default-src 'self'; script-src 'self' https://telegram.org; connect-src 'self' wss://api-stream.myfundedperpetuals.com; img-src 'self' data:; style-src 'self' 'unsafe-inline'; frame-ancestors https://web.telegram.org https://telegram.org https://*.telegram.org;",
           "X-Content-Type-Options": "nosniff",
           "Referrer-Policy": "no-referrer",
