@@ -131,6 +131,7 @@ export function startMiniAppServer(config: Config, db: Database) {
         symbol: marketSymbol(market),
         coin: marketCoin(market),
         provider: marketProvider(market),
+        category: typeof market.category === "string" ? market.category : undefined,
       }))
       .sort((a, b) => a.symbol.localeCompare(b.symbol) || a.provider.localeCompare(b.provider));
     const problems = guardAccount(
@@ -392,10 +393,12 @@ export function startMiniAppServer(config: Config, db: Database) {
     "/app/app-v3.js": { file: "app.js", type: "text/javascript; charset=utf-8" },
     "/app/app-v4.js": { file: "app.js", type: "text/javascript; charset=utf-8" },
     "/app/app-v5.js": { file: "app.js", type: "text/javascript; charset=utf-8" },
+    "/app/app-v6.js": { file: "app.js", type: "text/javascript; charset=utf-8" },
     "/app/styles.css": { file: "styles.css", type: "text/css; charset=utf-8" },
     "/app/styles-v3.css": { file: "styles.css", type: "text/css; charset=utf-8" },
     "/app/styles-v4.css": { file: "styles.css", type: "text/css; charset=utf-8" },
     "/app/styles-v5.css": { file: "styles.css", type: "text/css; charset=utf-8" },
+    "/app/styles-v6.css": { file: "styles.css", type: "text/css; charset=utf-8" },
   };
 
   const server = createServer(async (request, response) => {
