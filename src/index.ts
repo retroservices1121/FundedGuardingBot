@@ -3,6 +3,7 @@ import { createGuardianBot } from "./bot.js";
 import { Database } from "./db.js";
 import { startMiniAppServer } from "./mini-app-server.js";
 import { startGuardianMonitor } from "./monitor.js";
+import { startPulseChannel } from "./pulse.js";
 
 const config = loadConfig();
 const db = new Database(config.DATABASE_URL);
@@ -31,4 +32,6 @@ if (appUrl) {
   });
 }
 startGuardianMonitor(config, db, bot.api);
-await bot.start({ onStart: (info) => console.log(`@${info.username} is running.`) });
+const info = await bot.api.getMe();
+startPulseChannel(config, db, bot.api, info.username);
+await bot.start({ onStart: () => console.log(`@${info.username} is running.`) });

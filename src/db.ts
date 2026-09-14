@@ -80,6 +80,11 @@ export class Database {
         risk_band TEXT NOT NULL DEFAULT 'normal',
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
+      CREATE TABLE IF NOT EXISTS pulse_publications (
+        dedupe_key TEXT PRIMARY KEY,
+        published_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+      DELETE FROM pulse_publications WHERE published_at < NOW() - INTERVAL '90 days';
     `);
   }
 
@@ -203,6 +208,18 @@ export class Database {
        closed_position_ids=$4, risk_band=$5, updated_at=NOW()`,
       [telegramId, state.accountId, JSON.stringify(state.openPositionIds), JSON.stringify(state.closedPositionIds), state.riskBand],
     );
+  }
+
+  async claimPulsePublication(dedupeKey: string) {
+    const { rowCount } = await this.pool.query(
+      `INSERT INTO pulse_publications (dedupe_key) VALUES ($1) ON CONFLICT DO NOTHING`,
+      [dedupeKey],
+    );
+    return rowCount === 1;
+  }
+
+  releasePulsePublication(dedupeKey: string) {
+    return this.pool.query(`DELETE FROM pulse_publications WHERE dedupe_key=$1`, [dedupeKey]);
   }
 
   async putTicket(ticket: TradeTicket) {

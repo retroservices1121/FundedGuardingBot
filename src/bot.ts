@@ -32,6 +32,12 @@ function findMarket(markets: Market[], wanted: string) {
   return candidates.find((market) => market.id.startsWith("binance|")) ?? candidates[0];
 }
 
+function appUrlForMarket(appUrl: string, market: string) {
+  const url = new URL(appUrl);
+  url.searchParams.set("market", market.toUpperCase());
+  return url.toString();
+}
+
 export function createGuardianBot(config: Config, db: Database) {
   const bot = new Bot(config.TELEGRAM_BOT_TOKEN);
   const secrets = new SecretBox(config.ENCRYPTION_KEY);
@@ -82,11 +88,12 @@ export function createGuardianBot(config: Config, db: Database) {
     const user = await ensureUser(ctx);
     const connection = await db.getConnection(user.telegramId);
     const keyboard = new InlineKeyboard();
-    if (appUrl) keyboard.webApp("Open Guardian Mini App", appUrl).row();
+    const pulseMarket = /^pulse_([a-z0-9]{2,15})$/i.exec(String(ctx.match ?? ""))?.[1];
+    if (appUrl) keyboard.webApp(pulseMarket ? `Open ${pulseMarket.toUpperCase()} in Guardian` : "Open Guardian Mini App", pulseMarket ? appUrlForMarket(appUrl, pulseMarket) : appUrl).row();
     if (connection) keyboard.text("Account Status", "status").text("Open Positions", "positions").row().text("Closed Positions", "closed").text("Trade", "trade").row().text("Settings", "settings").text("Accounts", "accounts");
     else keyboard.text("Connect MyFundedPerps", "connect");
     await ctx.reply(connection
-      ? `🛡 Welcome back to Funded Guardian.\n\nConnected: ${connection.environment} key ••••${connection.keyLastFour}`
+      ? `🛡 Welcome back to Funded Guardian.\n\nConnected: ${connection.environment} key ••••${connection.keyLastFour}${pulseMarket ? `\nMarket: ${pulseMarket.toUpperCase()}` : ""}`
       : "🛡 Funded Guardian protects your challenge before every trade.\n\nOpen the free Mini App for instructions to connect your MyFundedPerps account.", { reply_markup: keyboard });
   });
 

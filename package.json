@@ -16,11 +16,13 @@
     "grammy": "^1.38.2",
     "pg": "^8.16.3",
     "sharp": "^0.35.4",
+    "ws": "^8.21.3",
     "zod": "^3.25.76"
   },
   "devDependencies": {
     "@types/node": "^24.3.1",
     "@types/pg": "^8.15.5",
+    "@types/ws": "^8.18.1",
     "tsx": "^4.20.5",
     "typescript": "^5.9.2",
     "vitest": "^3.2.4"

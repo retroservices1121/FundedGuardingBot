@@ -42,6 +42,7 @@ The repository now includes a mobile-first Telegram Mini App served by the same 
 - Atomic TP/SL replacement for open positions
 - Optional automatic daily profit and loss lockouts
 - Proactive Telegram alerts for new positions, closed positions, and shrinking loss room
+- Optional Funded Guardian Pulse channel with public price-move, unusual-volume, widened-spread, and daily market-brief posts
 
 Funded Guardian is free to use. There are no trials, subscriptions, pricing tiers, or payment checkout.
 
@@ -78,6 +79,20 @@ Database tables and indexes are created automatically on startup.
 The Guardian monitor checks connected accounts every 90 seconds by default. Set `GUARDIAN_MONITOR_SECONDS` between 30 and 3,600 seconds to adjust the interval. MyFundedPerps does not currently expose private account WebSocket events, so account alerts use authenticated REST reads while public prices and candles continue to use the public market stream.
 
 The Mini App requires HTTPS when opened through Telegram. Its API accepts only fresh Telegram-signed launch data. MyFundedPerps credentials are decrypted only on the server and are never returned to browser code.
+
+## Funded Guardian Pulse channel
+
+Pulse gives the public Telegram channel a useful job without turning it into a signal room. It publishes factual public-market conditions from the MyFundedPerps market stream; it never publishes customer account data or claims that a news event caused a move.
+
+1. Create a Telegram **channel** for the read-only Pulse feed. Use a separate linked discussion group later if the community needs conversation.
+2. Add the Funded Guardian bot as a channel administrator and enable **Post Messages**.
+3. In Railway, set `PULSE_CHANNEL_ID` to the public `@channelusername` or numeric `-100...` channel ID.
+4. Optionally adjust `PULSE_SYMBOLS`, move/volume/spread thresholds, cooldown, and the New York-time daily brief hour shown in `.env.example`.
+5. Redeploy and check Railway logs for `Pulse channel ready` and `Funded Guardian Pulse connected`.
+
+Safe defaults watch BTC, ETH, and SOL; alert on a 1% move over roughly 15 minutes, 3× recent 1-minute volume, or a 10-basis-point best-bid/ask spread. Each alert type is limited to once per market per 60-minute cooldown bucket and publications are deduplicated in PostgreSQL across restarts. Alert buttons hand the reader back to the private bot and open that market in the Mini App.
+
+Real news/catalyst alerts are intentionally not included yet. They require a reputable licensed news source and explicit source attribution; Pulse does not guess why a price moved.
 
 ## Safe test sequence
 
