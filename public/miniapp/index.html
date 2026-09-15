@@ -22,7 +22,7 @@
     <section id="onboarding" hidden>
       <div class="onboarding-shell">
         <div class="onboarding-progress" aria-label="Setup progress">
-          <i class="active" data-onboarding-dot="0"></i><i data-onboarding-dot="1"></i><i data-onboarding-dot="2"></i><i data-onboarding-dot="3"></i>
+          <i class="active" data-onboarding-dot="0"></i><i data-onboarding-dot="1"></i><i data-onboarding-dot="2"></i><i data-onboarding-dot="3"></i><i data-onboarding-dot="4"></i>
         </div>
         <article class="onboarding-card onboarding-step" data-onboarding-step="0">
           <span class="eyebrow">WELCOME TO FUNDED GUARDIAN</span>
@@ -34,7 +34,7 @@
         </article>
 
         <article class="onboarding-card onboarding-step" data-onboarding-step="1" hidden>
-          <span class="eyebrow">STEP 1 OF 3</span>
+          <span class="eyebrow">STEP 1 OF 4</span>
           <h1>Create your API key</h1>
           <div class="instruction-card"><b>1</b><div><strong>Open MyFundedPerps</strong><p>Sign in with the account that owns your challenge.</p></div></div>
           <div class="instruction-card"><b>2</b><div><strong>Open Settings</strong><p>Choose <em>API Keys</em>, then create a new key named “Funded Guardian”.</p></div></div>
@@ -45,7 +45,7 @@
         </article>
 
         <article class="onboarding-card onboarding-step" data-onboarding-step="2" hidden>
-          <span class="eyebrow">STEP 2 OF 3</span>
+          <span class="eyebrow">STEP 2 OF 4</span>
           <h1>Choose the right access</h1>
           <div class="permission-row"><span>Required</span><div><strong>Account access</strong><p>Select the challenge accounts you want Guardian to display.</p></div></div>
           <div class="permission-row"><span>For trading</span><div><strong>Trade permission</strong><p>Enable trading only if you want Guardian to submit orders after your confirmation. Read-only keys cannot trade.</p></div></div>
@@ -55,7 +55,7 @@
         </article>
 
         <article class="onboarding-card onboarding-step" data-onboarding-step="3" hidden>
-          <span class="eyebrow">STEP 3 OF 3</span>
+          <span class="eyebrow">STEP 3 OF 4</span>
           <h1>Connect Funded Guardian</h1>
           <p>Paste the API key below. Guardian validates it directly with MyFundedPerps before saving an encrypted copy.</p>
           <form id="connectForm">
@@ -68,7 +68,26 @@
           <button class="text-button onboarding-back-alone" data-onboarding-back>Back</button>
         </article>
 
-        <article class="onboarding-card onboarding-step success-step" data-onboarding-step="4" hidden>
+        <article class="onboarding-card onboarding-step" data-onboarding-step="4" hidden>
+          <span class="eyebrow">STEP 4 OF 4</span>
+          <h1>Choose your Guardian mode</h1>
+          <p>Guardian does not choose your risk. MyFundedPerps makes the final decision on every submitted order.</p>
+          <label class="full-setting">Personal guardrails
+            <select id="onboardingGuardianMode">
+              <option value="off" selected>Off, no Guardian trading limits</option>
+              <option value="warn">Warnings only</option>
+              <option value="enforce">Enforce my limits</option>
+            </select>
+          </label>
+          <div id="onboardingGuardLimits" class="settings-grid" hidden>
+            <label>Maximum risk per trade<input id="onboardingMaxRisk" inputmode="decimal" type="number" min="1" max="100000" placeholder="Enter your limit"></label>
+            <label>Maximum loss-room use<input id="onboardingLossRoom" inputmode="decimal" type="number" min="1" max="100" placeholder="Enter a percent"></label>
+          </div>
+          <p class="fine-print">You can change or disable these optional controls in Settings at any time. This is not financial advice.</p>
+          <button class="primary wide" id="saveOnboardingGuardrails">Save my choice</button>
+        </article>
+
+        <article class="onboarding-card onboarding-step success-step" data-onboarding-step="5" hidden>
           <div class="success-mark">✓</div>
           <span class="eyebrow">CONNECTION COMPLETE</span>
           <h1>Your challenge is ready</h1>
@@ -208,7 +227,7 @@
             <label class="full-setting">Maximum risk per trade<input id="maxTradeRisk" inputmode="decimal" type="number" min="1" max="100000" step="1"><small>Your personal dollar-risk threshold. This is editable at any time.</small></label>
             <label class="full-setting">Maximum loss-room use<input id="lossRoomPercent" inputmode="decimal" type="number" min="5" max="100" step="1"><small>Percent of the smaller daily-loss or drawdown room that one trade may risk.</small></label>
           </div>
-          <label class="toggle-row"><input id="enforceGuardrails" type="checkbox" checked><span>Block trades outside my risk settings</span></label>
+          <label class="full-setting">Personal guardrail mode<select id="guardianMode"><option value="off">Off, no Guardian limits</option><option value="warn">Warnings only</option><option value="enforce">Enforce my limits</option></select><small>These are your settings. MyFundedPerps remains the final authority for its account rules.</small></label>
           <label class="toggle-row"><input id="alertsEnabled" type="checkbox" checked><span>Telegram position and risk alerts</span></label>
           <button class="secondary wide" id="saveGuardian">Save Guardian controls</button>
           <p class="settings-disclaimer">Funded Guardian provides user-configured risk tools and account information—not financial or trading advice. You control your settings and every trading decision. Guardrails cannot guarantee that a challenge will pass or prevent losses.</p>

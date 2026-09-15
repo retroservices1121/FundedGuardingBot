@@ -141,7 +141,7 @@ export function startMiniAppServer(config: Config, db: Database) {
       state.user.riskUsd,
       state.user.maxRiskUsd,
       state.user.maxLossRoomUsagePercent,
-      state.user.enforceGuardrails,
+      state.user.guardianMode === "enforce",
     );
     const dailyPnl = accountDailyPnl(state.account);
     const autoLockReason = automaticLockReason(state.user, dailyPnl);
@@ -157,6 +157,7 @@ export function startMiniAppServer(config: Config, db: Database) {
         maxRiskUsd: state.user.maxRiskUsd,
         maxLossRoomUsagePercent: state.user.maxLossRoomUsagePercent,
         enforceGuardrails: state.user.enforceGuardrails,
+        guardianMode: state.user.guardianMode,
         stopPercent: state.user.stopPercent,
         rewardRisk: state.user.rewardRisk,
         leverage: state.user.leverage,
@@ -218,8 +219,11 @@ export function startMiniAppServer(config: Config, db: Database) {
       state.client.listMarkets(),
       state.client.listOpenPositions(state.account.id),
     ]);
-    const problems = guardAccount(state.account, policy, requestedRisk, state.user.maxRiskUsd, state.user.maxLossRoomUsagePercent, state.user.enforceGuardrails);
-    if (problems.length) throw new Error(problems.join(" "));
+    if (state.user.guardianMode === "enforce") {
+      const allowance = riskAllowance(state.account, state.user.maxRiskUsd, state.user.maxLossRoomUsagePercent);
+      if (requestedRisk > state.user.maxRiskUsd) throw new Error(`Requested risk $${requestedRisk} exceeds your $${state.user.maxRiskUsd} limit.`);
+      if (requestedRisk > allowance.allowedRisk) throw new Error(`Risk exceeds your configured loss-room limit of $${allowance.allowedRisk.toFixed(2)}.`);
+    }
     const market = markets.find(item => item.id === marketId && item.available !== false);
     if (!market) throw new Error("That market is not currently available.");
     const symbol = marketSymbol(market);
@@ -242,16 +246,13 @@ export function startMiniAppServer(config: Config, db: Database) {
       leverage: requestedLeverage,
       ttlSeconds: config.CONFIRMATION_TTL_SECONDS,
     });
-    if (!state.user.enforceGuardrails) {
+    if (state.user.guardianMode === "warn") {
       const allowance = riskAllowance(state.account, state.user.maxRiskUsd, state.user.maxLossRoomUsagePercent);
       if (requestedRisk > allowance.allowedRisk) {
         ticket.guardianWarning = `This trade risks $${requestedRisk.toFixed(2)}, above your configured Guardian limit of $${allowance.allowedRisk.toFixed(2)}. Warnings-only mode is enabled.`;
       }
     }
     ticket.platformRules = platformRuleCheck({ account: state.account, policy, market, ticket, openPositions });
-    if (!ticket.platformRules.eligible) {
-      throw new Error(`MyFundedPerps rule check: ${ticket.platformRules.problems.join(" ")}`);
-    }
     await db.putTicket(ticket);
     return ticket;
   }
@@ -260,7 +261,7 @@ export function startMiniAppServer(config: Config, db: Database) {
     if (request.method === "GET" && pathname === "/api/session") {
       const { user } = await authenticatedUser(request);
       const connection = await db.getConnection(user.telegramId);
-      return json(response, 200, { connected: !!connection, allowLive: config.ALLOW_LIVE_TRADING, isAdmin: config.ADMIN_TELEGRAM_ID === user.telegramId, refreshSeconds: config.MINI_APP_REFRESH_SECONDS });
+      return json(response, 200, { connected: !!connection, onboardingState: user.onboardingState, allowLive: config.ALLOW_LIVE_TRADING, isAdmin: config.ADMIN_TELEGRAM_ID === user.telegramId, refreshSeconds: config.MINI_APP_REFRESH_SECONDS });
     }
     if (request.method === "GET" && pathname === "/api/admin/stats") {
       const { telegram } = await authenticatedUser(request);
@@ -280,7 +281,7 @@ export function startMiniAppServer(config: Config, db: Database) {
       const preferred = accounts.find(item => ["active", "trading"].includes(String(item.status).toLowerCase())) ?? accounts[0]!;
       await db.saveConnection(user.telegramId, { environment, encryptedApiKey: secrets.encrypt(key), keyLastFour: key.slice(-4) });
       await db.setSelectedAccount(user.telegramId, preferred.id);
-      await db.setOnboardingState(user.telegramId, null);
+      await db.setOnboardingState(user.telegramId, "choose_guardrails");
       return json(response, 200, { connected: true });
     }
     if (request.method === "GET" && pathname === "/api/dashboard") {
@@ -309,7 +310,7 @@ export function startMiniAppServer(config: Config, db: Database) {
       const payload = await body(request);
       const risk = Number(payload.riskUsd);
       if (!Number.isFinite(risk) || risk <= 0 || risk > 100_000) throw new Error("Risk must be between $1 and $100,000.");
-      if (user.enforceGuardrails && risk > user.maxRiskUsd) throw new Error(`Risk exceeds your $${user.maxRiskUsd} maximum risk per trade.`);
+      if (user.guardianMode === "enforce" && risk > user.maxRiskUsd) throw new Error(`Risk exceeds your $${user.maxRiskUsd} maximum risk per trade.`);
       await db.updateRisk(user.telegramId, risk);
       return json(response, 200, { riskUsd: risk });
     }
@@ -326,17 +327,19 @@ export function startMiniAppServer(config: Config, db: Database) {
         dailyProfitLockUsd: optionalAmount(payload.dailyProfitLockUsd, "Profit lock"),
         dailyLossLockUsd: optionalAmount(payload.dailyLossLockUsd, "Loss lock"),
         alertsEnabled: payload.alertsEnabled !== false,
-        maxLossRoomUsagePercent: Number(payload.maxLossRoomUsagePercent),
-        maxRiskUsd: Number(payload.maxRiskUsd),
-        enforceGuardrails: payload.enforceGuardrails !== false,
+        maxLossRoomUsagePercent: Number(payload.maxLossRoomUsagePercent ?? 100),
+        maxRiskUsd: Number(payload.maxRiskUsd ?? 100000),
+        guardianMode: String(payload.guardianMode ?? "off") as "off" | "warn" | "enforce",
       };
-      if (!Number.isFinite(settings.maxLossRoomUsagePercent) || settings.maxLossRoomUsagePercent < 5 || settings.maxLossRoomUsagePercent > 100) {
-        throw new Error("Maximum loss-room use must be between 5% and 100%.");
+      if (!["off", "warn", "enforce"].includes(settings.guardianMode)) throw new Error("Choose Off, Warnings, or Enforced for Guardian limits.");
+      if (!Number.isFinite(settings.maxLossRoomUsagePercent) || settings.maxLossRoomUsagePercent < 1 || settings.maxLossRoomUsagePercent > 100) {
+        throw new Error("Maximum loss-room use must be between 1% and 100%.");
       }
       if (!Number.isFinite(settings.maxRiskUsd) || settings.maxRiskUsd < 1 || settings.maxRiskUsd > 100_000) {
         throw new Error("Maximum trade risk must be between $1 and $100,000.");
       }
       await db.updateGuardianSettings(user.telegramId, settings);
+      if (user.onboardingState === "choose_guardrails") await db.setOnboardingState(user.telegramId, null);
       return json(response, 200, settings);
     }
     if (request.method === "POST" && pathname === "/api/trade/quote") {
@@ -358,7 +361,6 @@ export function startMiniAppServer(config: Config, db: Database) {
       const freshMarket = freshMarkets.find(item => item.id === ticket.marketId && item.available !== false);
       if (!freshMarket) throw new Error("MyFundedPerps rule check: this market is no longer available.");
       const freshCheck = platformRuleCheck({ account: freshAccount, policy: freshPolicy, market: freshMarket, ticket, openPositions: freshPositions });
-      if (!freshCheck.eligible) throw new Error(`MyFundedPerps rule check: ${freshCheck.problems.join(" ")}`);
       if (config.DRY_RUN) {
         await db.recordTradeExecution({ ticketId: ticket.id, telegramId: user.telegramId, accountId: ticket.accountId, symbol: ticket.symbol, side: ticket.side, notionalUsd: ticket.estimatedNotional, dryRun: true, status: "validated" });
         return json(response, 200, { dryRun: true, status: "validated" });

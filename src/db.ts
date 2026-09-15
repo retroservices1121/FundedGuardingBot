@@ -16,6 +16,7 @@ export interface UserProfile {
   leverage: number;
   maxLossRoomUsagePercent: number;
   enforceGuardrails: boolean;
+  guardianMode: "off" | "warn" | "enforce";
   dailyProfitLockUsd?: number;
   dailyLossLockUsd?: number;
   alertsEnabled: boolean;
@@ -44,11 +45,11 @@ export class Database {
         onboarding_state TEXT,
         selected_account_id TEXT,
         risk_usd NUMERIC NOT NULL DEFAULT 75,
-        max_risk_usd NUMERIC NOT NULL DEFAULT 100,
+        max_risk_usd NUMERIC NOT NULL DEFAULT 100000,
         stop_percent NUMERIC NOT NULL DEFAULT 0.5,
         reward_risk NUMERIC NOT NULL DEFAULT 1.8,
         leverage INTEGER NOT NULL DEFAULT 2,
-        max_loss_room_usage_percent NUMERIC NOT NULL DEFAULT 20,
+        max_loss_room_usage_percent NUMERIC NOT NULL DEFAULT 100,
         locked_until TIMESTAMPTZ,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -72,7 +73,11 @@ export class Database {
       ALTER TABLE users ADD COLUMN IF NOT EXISTS daily_profit_lock_usd NUMERIC;
       ALTER TABLE users ADD COLUMN IF NOT EXISTS daily_loss_lock_usd NUMERIC;
       ALTER TABLE users ADD COLUMN IF NOT EXISTS alerts_enabled BOOLEAN NOT NULL DEFAULT TRUE;
-      ALTER TABLE users ADD COLUMN IF NOT EXISTS enforce_guardrails BOOLEAN NOT NULL DEFAULT TRUE;
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS enforce_guardrails BOOLEAN NOT NULL DEFAULT FALSE;
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS guardian_mode TEXT NOT NULL DEFAULT 'off';
+      ALTER TABLE users ALTER COLUMN max_risk_usd SET DEFAULT 100000;
+      ALTER TABLE users ALTER COLUMN max_loss_room_usage_percent SET DEFAULT 100;
+      ALTER TABLE users ALTER COLUMN enforce_guardrails SET DEFAULT FALSE;
       ALTER TABLE users ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMPTZ;
       UPDATE users SET last_seen_at=updated_at WHERE last_seen_at IS NULL;
       ALTER TABLE users ALTER COLUMN last_seen_at SET DEFAULT NOW();
@@ -126,7 +131,8 @@ export class Database {
       maxRiskUsd: Number(row.max_risk_usd), stopPercent: Number(row.stop_percent),
       rewardRisk: Number(row.reward_risk), leverage: Number(row.leverage),
       maxLossRoomUsagePercent: Number(row.max_loss_room_usage_percent),
-      enforceGuardrails: row.enforce_guardrails !== false,
+      enforceGuardrails: row.guardian_mode === "enforce",
+      guardianMode: (["off", "warn", "enforce"].includes(row.guardian_mode) ? row.guardian_mode : "off") as UserProfile["guardianMode"],
       dailyProfitLockUsd: row.daily_profit_lock_usd === null ? undefined : Number(row.daily_profit_lock_usd),
       dailyLossLockUsd: row.daily_loss_lock_usd === null ? undefined : Number(row.daily_loss_lock_usd),
       alertsEnabled: row.alerts_enabled !== false, lockedUntil: row.locked_until ?? undefined,
@@ -187,10 +193,10 @@ export class Database {
     return this.pool.query(`UPDATE users SET locked_until=NULL WHERE telegram_id=$1`, [telegramId]);
   }
 
-  async updateGuardianSettings(telegramId: number, settings: { dailyProfitLockUsd?: number; dailyLossLockUsd?: number; alertsEnabled: boolean; maxLossRoomUsagePercent: number; maxRiskUsd: number; enforceGuardrails: boolean }) {
+  async updateGuardianSettings(telegramId: number, settings: { dailyProfitLockUsd?: number; dailyLossLockUsd?: number; alertsEnabled: boolean; maxLossRoomUsagePercent: number; maxRiskUsd: number; guardianMode: UserProfile["guardianMode"] }) {
     await this.pool.query(
-      `UPDATE users SET daily_profit_lock_usd=$2, daily_loss_lock_usd=$3, alerts_enabled=$4, max_loss_room_usage_percent=$5, max_risk_usd=$6, enforce_guardrails=$7, updated_at=NOW() WHERE telegram_id=$1`,
-      [telegramId, settings.dailyProfitLockUsd ?? null, settings.dailyLossLockUsd ?? null, settings.alertsEnabled, settings.maxLossRoomUsagePercent, settings.maxRiskUsd, settings.enforceGuardrails],
+      `UPDATE users SET daily_profit_lock_usd=$2, daily_loss_lock_usd=$3, alerts_enabled=$4, max_loss_room_usage_percent=$5, max_risk_usd=$6, enforce_guardrails=$7, guardian_mode=$8, updated_at=NOW() WHERE telegram_id=$1`,
+      [telegramId, settings.dailyProfitLockUsd ?? null, settings.dailyLossLockUsd ?? null, settings.alertsEnabled, settings.maxLossRoomUsagePercent, settings.maxRiskUsd, settings.guardianMode === "enforce", settings.guardianMode],
     );
   }
 

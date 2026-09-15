@@ -235,7 +235,7 @@ export function createGuardianBot(config: Config, db: Database) {
 
   async function showSettings(ctx: Context) {
     const user = await ensureUser(ctx);
-    await ctx.reply(`⚙️ Guardian Settings\n\nRisk per trade: $${user.riskUsd}\nPersonal threshold: $${user.maxRiskUsd}\nGuardrail mode: ${user.enforceGuardrails ? "Enforced" : "Warnings only"}\nStop distance: ${user.stopPercent}%\nReward/risk: ${user.rewardRisk}:1\nLeverage: ${user.leverage}×\nMax loss-room use: ${user.maxLossRoomUsagePercent}%\nProfit lock: ${user.dailyProfitLockUsd ? `$${user.dailyProfitLockUsd}` : "Off"}\nLoss lock: ${user.dailyLossLockUsd ? `$${user.dailyLossLockUsd}` : "Off"}\nTelegram alerts: ${user.alertsEnabled ? "On" : "Off"}\n\nOpen the Mini App to configure automatic controls.`, {
+    await ctx.reply(`⚙️ Guardian Settings\n\nRisk per trade: $${user.riskUsd}\nPersonal threshold: ${user.guardianMode === "off" ? "Off" : `$${user.maxRiskUsd}`}\nGuardrail mode: ${user.guardianMode === "enforce" ? "Enforced" : user.guardianMode === "warn" ? "Warnings only" : "Off"}\nStop distance: ${user.stopPercent}%\nReward/risk: ${user.rewardRisk}:1\nLeverage: ${user.leverage}×\nMax loss-room use: ${user.guardianMode === "off" ? "Off" : `${user.maxLossRoomUsagePercent}%`}\nProfit lock: ${user.dailyProfitLockUsd ? `$${user.dailyProfitLockUsd}` : "Off"}\nLoss lock: ${user.dailyLossLockUsd ? `$${user.dailyLossLockUsd}` : "Off"}\nTelegram alerts: ${user.alertsEnabled ? "On" : "Off"}\n\nOpen the Mini App to configure optional controls.`, {
       reply_markup: new InlineKeyboard().text("Risk $25", "risk:25").text("$50", "risk:50").text("$75", "risk:75").text("$100", "risk:100").row().text("Back", "status"),
     });
   }
@@ -276,7 +276,9 @@ export function createGuardianBot(config: Config, db: Database) {
       const { user, account, client } = await selectedAccount(ctx);
       if (user.lockedUntil && user.lockedUntil.getTime() > Date.now()) throw new Error("Trading is locked until the next New York trading day.");
       const [policy, markets] = await Promise.all([client.getTradingPolicy(account.id), client.listMarkets()]);
-      const problems = guardAccount(account, policy, user.riskUsd, user.maxRiskUsd, user.maxLossRoomUsagePercent);
+      const problems = user.guardianMode === "enforce"
+        ? guardAccount(account, policy, user.riskUsd, user.maxRiskUsd, user.maxLossRoomUsagePercent)
+        : [];
       if (problems.length) return void (await ctx.reply(`🛑 Trade blocked\n\n${problems.map((item) => `• ${item}`).join("\n")}`));
       const market = findMarket(markets, symbol);
       if (!market) throw new Error(`${symbol} market is not currently available.`);

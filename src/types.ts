@@ -133,6 +133,7 @@ export interface TradingPolicy {
 export interface PlatformRuleCheck {
   eligible: boolean;
   problems: string[];
+  warnings: string[];
   notes: string[];
   requestedNotional: number;
   estimatedMargin?: number;

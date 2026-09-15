@@ -188,24 +188,25 @@ export function platformRuleCheck(input: {
   const estimatedMargin = ticket.leverage > 0
     ? ticket.estimatedNotional / ticket.leverage + (ticket.estimatedFee ?? 0)
     : undefined;
-  const problems = guardAccount(account, policy, ticket.riskUsd, Number.POSITIVE_INFINITY, 100, false);
+  const problems: string[] = [];
+  const warnings = guardAccount(account, policy, ticket.riskUsd, Number.POSITIVE_INFINITY, 100, false);
   const notes: string[] = [];
 
   if (maxPositionNotional !== undefined && ticket.estimatedNotional > maxPositionNotional) {
-    problems.push(`Position notional ${ticket.estimatedNotional.toFixed(2)} exceeds the MyFundedPerps cap of ${maxPositionNotional.toFixed(2)}.`);
+    warnings.push(`Estimated position notional ${ticket.estimatedNotional.toFixed(2)} is above the published cap of ${maxPositionNotional.toFixed(2)}.`);
   }
   if (minOrderNotional !== undefined && ticket.estimatedNotional < minOrderNotional) {
-    problems.push(`Position notional must be at least ${minOrderNotional.toFixed(2)}.`);
+    warnings.push(`Estimated position notional is below the published minimum of ${minOrderNotional.toFixed(2)}.`);
   }
   if (maxLeverage !== undefined && ticket.leverage > maxLeverage) {
-    problems.push(`Selected ${ticket.leverage}x leverage exceeds the MyFundedPerps maximum of ${maxLeverage}x for this trade.`);
+    warnings.push(`Selected ${ticket.leverage}x leverage is above the published maximum of ${maxLeverage}x for this trade.`);
   }
   if (maxOpenPositions !== undefined && openPositions.length >= maxOpenPositions
     && !openPositions.some(position => position.market_id === ticket.marketId)) {
-    problems.push(`This account already has ${openPositions.length} open positions, which reaches its limit of ${maxOpenPositions}.`);
+    warnings.push(`This account has ${openPositions.length} open positions, which reaches the published limit of ${maxOpenPositions}.`);
   }
   if (availableBalance !== undefined && estimatedMargin !== undefined && estimatedMargin > availableBalance) {
-    problems.push(`Estimated margin and entry fee require ${estimatedMargin.toFixed(2)}, but available balance is ${availableBalance.toFixed(2)}.`);
+    warnings.push(`Estimated margin and entry fee are ${estimatedMargin.toFixed(2)}, while reported available balance is ${availableBalance.toFixed(2)}.`);
   }
 
   if (maxPositionNotional === undefined) notes.push("The API did not publish a numeric position cap for this account.");
@@ -215,6 +216,7 @@ export function platformRuleCheck(input: {
   return {
     eligible: problems.length === 0,
     problems: [...new Set(problems)],
+    warnings: [...new Set(warnings)],
     notes,
     requestedNotional: ticket.estimatedNotional,
     estimatedMargin,

@@ -94,7 +94,7 @@ describe("guardian", () => {
     )).toEqual([]);
   });
 
-  it("blocks account-specific notional, leverage, position, and collateral limits", () => {
+  it("reports account-specific estimates without locally blocking the order", () => {
     const ticket = buildTicket({
       id: "t", userId: 1, accountId: "a", market: { id: "gold", max_leverage: 3 }, symbol: "GOLD",
       side: "buy", riskUsd: 150, quote: { bid: 4287, ask: 4288, mid: 4287.5, estimated_notional: 30_000, estimated_fee: 1.5 },
@@ -107,11 +107,12 @@ describe("guardian", () => {
       ticket,
       openPositions: [{ id: "p", market_id: "btc" } as never],
     });
-    expect(check.eligible).toBe(false);
-    expect(check.problems.join(" ")).toContain("exceeds the MyFundedPerps cap");
-    expect(check.problems.join(" ")).toContain("maximum of 3x");
-    expect(check.problems.join(" ")).toContain("reaches its limit of 1");
-    expect(check.problems.join(" ")).toContain("available balance");
+    expect(check.eligible).toBe(true);
+    expect(check.problems).toEqual([]);
+    expect(check.warnings.join(" ")).toContain("above the published cap");
+    expect(check.warnings.join(" ")).toContain("maximum of 3x");
+    expect(check.warnings.join(" ")).toContain("published limit of 1");
+    expect(check.warnings.join(" ")).toContain("reported available balance");
   });
 
   it("can warn without enforcing user-configured limits", () => {
