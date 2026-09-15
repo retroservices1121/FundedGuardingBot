@@ -4,6 +4,8 @@ import { SecretBox } from "./crypto.js";
 import { Database } from "./db.js";
 import { accountDailyPnl, automaticLockReason, riskBand } from "./guardian.js";
 import { MfpClient } from "./mfp.js";
+import { accountRisk } from "./risk.js";
+import type { ChallengeAccount } from "./types.js";
 
 const HOSTS = {
   sandbox: "https://sandbox.myfundedperpetuals.com",
@@ -11,6 +13,24 @@ const HOSTS = {
 } as const;
 
 const cash = (value: number | null | undefined) => Number(value ?? 0).toLocaleString("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 2 });
+
+function roomLine(label: string, value: unknown) {
+  const amount = Number(value);
+  return Number.isFinite(amount) ? `${label}: ${cash(amount)}` : undefined;
+}
+
+export function guardianRiskAlert(account: ChallengeAccount, band: "warning" | "critical") {
+  const risk = accountRisk(account);
+  const rooms = [
+    roomLine("Daily loss room", risk.daily_loss_room),
+    roomLine("Maximum loss room", risk.max_drawdown_room),
+  ].filter((line): line is string => line !== undefined);
+  if (!rooms.length) rooms.push("Loss-room data is temporarily unavailable.");
+  const guidance = band === "critical"
+    ? "New trades are not recommended."
+    : "Reduce risk before opening another position.";
+  return `${band === "critical" ? "🚨" : "⚠️"} Guardian risk alert\n\n${rooms.join("\n")}\n${guidance}`;
+}
 
 export function startGuardianMonitor(config: Config, db: Database, telegram: Api) {
   const secrets = new SecretBox(config.ENCRYPTION_KEY);
@@ -55,8 +75,7 @@ export function startGuardianMonitor(config: Config, db: Database, telegram: Api
               await telegram.sendMessage(user.telegramId, `🏁 Position closed\n\n${position.symbol || position.coin} ${position.side.toUpperCase()}\nRealized P&L: ${cash(position.realized_pnl)}\nFees: ${cash(position.fees)}`);
             }
             if (next.riskBand !== previous.riskBand && next.riskBand !== "normal") {
-              const risk = account.risk ?? account.risk_snapshot ?? {};
-              await telegram.sendMessage(user.telegramId, `${next.riskBand === "critical" ? "🚨" : "⚠️"} Guardian risk alert\n\nDaily loss room: ${cash(Number(risk.daily_loss_room))}\nMaximum loss room: ${cash(Number(risk.max_loss_room))}\n${next.riskBand === "critical" ? "New trades are not recommended." : "Reduce risk before opening another position."}`);
+              await telegram.sendMessage(user.telegramId, guardianRiskAlert(account, next.riskBand));
             }
           }
           await db.saveMonitorState(user.telegramId, next);
