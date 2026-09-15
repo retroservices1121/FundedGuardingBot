@@ -1,4 +1,4 @@
-import type { ChallengeAccount, Market, Quote, RiskSnapshot, Side, TradeTicket, TradingPolicy } from "./types.js";
+import type { ChallengeAccount, Market, PlatformRuleCheck, Position, Quote, RiskSnapshot, Side, TradeTicket, TradingPolicy } from "./types.js";
 
 function finite(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
@@ -103,6 +103,75 @@ export function riskAllowance(account: ChallengeAccount, maxRisk: number, maxLos
   const limitingRoom = rooms.length ? Math.min(...rooms) : undefined;
   const roomAllowance = limitingRoom === undefined ? maxRisk : limitingRoom * maxLossRoomUsagePercent / 100;
   return { limitingRoom, allowedRisk: Math.max(0, Math.min(maxRisk, roomAllowance)) };
+}
+
+
+function finiteFrom(records: Array<Record<string, unknown> | undefined>, keys: string[]): number | undefined {
+  for (const record of records) {
+    if (!record) continue;
+    for (const key of keys) {
+      const value = finite(record[key]);
+      if (value !== undefined) return value;
+    }
+  }
+  return undefined;
+}
+
+export function platformRuleCheck(input: {
+  account: ChallengeAccount;
+  policy: TradingPolicy;
+  market: Market;
+  ticket: TradeTicket;
+  openPositions: Position[];
+}): PlatformRuleCheck {
+  const { account, policy, market, ticket, openPositions } = input;
+  const limits = policy.limits as Record<string, unknown> | undefined;
+  const sources = [limits, market as Record<string, unknown>, account as Record<string, unknown>];
+  const maxPositionNotional = finiteFrom(sources, ["max_position_value_usd", "max_position_notional_usd", "max_notional_usd"]);
+  const minOrderNotional = finiteFrom(sources, ["min_order_notional_usd", "minimum_order_notional_usd"]);
+  const maxLeverage = finiteFrom(sources, ["max_leverage", "maximum_leverage"]);
+  const maxOpenPositions = finiteFrom(sources, ["max_open_positions"]);
+  const availableBalance = finite(accountRisk(account).available_balance);
+  const estimatedMargin = ticket.leverage > 0
+    ? ticket.estimatedNotional / ticket.leverage + (ticket.estimatedFee ?? 0)
+    : undefined;
+  const problems = guardAccount(account, policy, ticket.riskUsd, Number.POSITIVE_INFINITY, 100, false);
+  const notes: string[] = [];
+
+  if (maxPositionNotional !== undefined && ticket.estimatedNotional > maxPositionNotional) {
+    problems.push(`Position notional ${ticket.estimatedNotional.toFixed(2)} exceeds the MyFundedPerps cap of ${maxPositionNotional.toFixed(2)}.`);
+  }
+  if (minOrderNotional !== undefined && ticket.estimatedNotional < minOrderNotional) {
+    problems.push(`Position notional must be at least ${minOrderNotional.toFixed(2)}.`);
+  }
+  if (maxLeverage !== undefined && ticket.leverage > maxLeverage) {
+    problems.push(`Selected ${ticket.leverage}x leverage exceeds the MyFundedPerps maximum of ${maxLeverage}x for this trade.`);
+  }
+  if (maxOpenPositions !== undefined && openPositions.length >= maxOpenPositions
+    && !openPositions.some(position => position.market_id === ticket.marketId)) {
+    problems.push(`This account already has ${openPositions.length} open positions, which reaches its limit of ${maxOpenPositions}.`);
+  }
+  if (availableBalance !== undefined && estimatedMargin !== undefined && estimatedMargin > availableBalance) {
+    problems.push(`Estimated margin and entry fee require ${estimatedMargin.toFixed(2)}, but available balance is ${availableBalance.toFixed(2)}.`);
+  }
+
+  if (maxPositionNotional === undefined) notes.push("The API did not publish a numeric position cap for this account.");
+  if (maxLeverage === undefined) notes.push("The API did not publish a numeric leverage cap for this market.");
+  notes.push("MyFundedPerps performs the final exposure, collateral, slippage, and account-state check when the order is submitted.");
+
+  return {
+    eligible: problems.length === 0,
+    problems: [...new Set(problems)],
+    notes,
+    requestedNotional: ticket.estimatedNotional,
+    estimatedMargin,
+    availableBalance,
+    maxPositionNotional,
+    minOrderNotional,
+    maxLeverage,
+    maxOpenPositions,
+    openPositions: openPositions.length,
+  };
 }
 
 export function calculateSize(

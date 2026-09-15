@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { buildQuotePath, MfpClient, normalizeMarkets, orderPrice, positionExitOrders } from "../src/mfp.js";
+import { buildQuotePath, MfpClient, normalizeMarkets, orderPrice, orderRejectionReason, positionExitOrders } from "../src/mfp.js";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -85,5 +85,25 @@ describe("quote request construction", () => {
     expect(() => buildQuotePath("binance|BTCUSDT", "buy", 0)).toThrow(
       "Quote size must be positive.",
     );
+  });
+});
+
+describe("order rejection details", () => {
+  it("extracts the platform reason and support reference", () => {
+    expect(orderRejectionReason({
+      status: "rejected",
+      rejection_reason: "Market exposure cap exceeded",
+      support_reference: "ord_123",
+    })).toBe("Market exposure cap exceeded Reference: ord_123");
+  });
+
+  it("throws when a successful API response contains a rejected order", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      data: { status: "rejected", reason: "Maximum position size exceeded" },
+    }), { status: 200, headers: { "Content-Type": "application/json" } })));
+    await expect(new MfpClient("https://example.test", "secret").placeProtectedMarketOrder({
+      accountId: "a", marketId: "gold", side: "buy", size: 1, expectedPrice: 4_000,
+      leverage: 2, stopLossPrice: 3_980, takeProfitPrice: 4_040, clientOrderId: "guardian-t",
+    })).rejects.toThrow("Maximum position size exceeded");
   });
 });

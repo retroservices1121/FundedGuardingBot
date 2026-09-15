@@ -127,6 +127,20 @@ export interface TradingPolicy {
   [key: string]: unknown;
 }
 
+export interface PlatformRuleCheck {
+  eligible: boolean;
+  problems: string[];
+  notes: string[];
+  requestedNotional: number;
+  estimatedMargin?: number;
+  availableBalance?: number;
+  maxPositionNotional?: number;
+  minOrderNotional?: number;
+  maxLeverage?: number;
+  maxOpenPositions?: number;
+  openPositions?: number;
+}
+
 export interface TradeTicket {
   id: string;
   userId: number;
@@ -143,5 +157,6 @@ export interface TradeTicket {
   estimatedFee?: number;
   leverage: number;
   guardianWarning?: string;
+  platformRules?: PlatformRuleCheck;
   expiresAt: number;
 }

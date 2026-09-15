@@ -7,7 +7,7 @@ import { SecretBox } from "./crypto.js";
 import { Database } from "./db.js";
 import { MfpClient, MfpError } from "./mfp.js";
 import { accountDailyPnl, automaticLockReason } from "./guardian.js";
-import { accountRisk, accountRuleProgress, buildTicket, calculateSize, guardAccount, riskAllowance } from "./risk.js";
+import { accountRisk, accountRuleProgress, buildTicket, calculateSize, guardAccount, platformRuleCheck, riskAllowance } from "./risk.js";
 import { createClosedPositionShareCard } from "./share-card.js";
 import { validateTelegramInitData, type TelegramMiniAppUser } from "./telegram-auth.js";
 import type { Market, PositionView, Side } from "./types.js";
@@ -203,7 +203,11 @@ export function startMiniAppServer(config: Config, db: Database) {
       throw new Error(`${autoLockReason}. Guardian locked new trades until the next New York trading day.`);
     }
     if (state.user.lockedUntil && state.user.lockedUntil.getTime() > Date.now()) throw new Error("Trading is locked until the next New York trading day.");
-    const [policy, markets] = await Promise.all([state.client.getTradingPolicy(state.account.id), state.client.listMarkets()]);
+    const [policy, markets, openPositions] = await Promise.all([
+      state.client.getTradingPolicy(state.account.id),
+      state.client.listMarkets(),
+      state.client.listOpenPositions(state.account.id),
+    ]);
     const problems = guardAccount(state.account, policy, requestedRisk, state.user.maxRiskUsd, state.user.maxLossRoomUsagePercent, state.user.enforceGuardrails);
     if (problems.length) throw new Error(problems.join(" "));
     const market = markets.find(item => item.id === marketId && item.available !== false);
@@ -234,8 +238,9 @@ export function startMiniAppServer(config: Config, db: Database) {
         ticket.guardianWarning = `This trade risks $${requestedRisk.toFixed(2)}, above your configured Guardian limit of $${allowance.allowedRisk.toFixed(2)}. Warnings-only mode is enabled.`;
       }
     }
-    if (policy.limits?.max_position_value_usd && ticket.estimatedNotional > policy.limits.max_position_value_usd) {
-      throw new Error("Estimated notional exceeds the account policy cap.");
+    ticket.platformRules = platformRuleCheck({ account: state.account, policy, market, ticket, openPositions });
+    if (!ticket.platformRules.eligible) {
+      throw new Error(`MyFundedPerps rule check: ${ticket.platformRules.problems.join(" ")}`);
     }
     await db.putTicket(ticket);
     return ticket;
@@ -334,6 +339,16 @@ export function startMiniAppServer(config: Config, db: Database) {
       if (!ticket) throw new Error("This quote expired or was already used.");
       const currentUser = await db.getUser(user.telegramId);
       if (currentUser.lockedUntil && currentUser.lockedUntil.getTime() > Date.now()) throw new Error("Trading is locked.");
+      const [freshAccount, freshPolicy, freshPositions, freshMarkets] = await Promise.all([
+        client.getAccount(ticket.accountId),
+        client.getTradingPolicy(ticket.accountId),
+        client.listOpenPositions(ticket.accountId),
+        client.listMarkets(),
+      ]);
+      const freshMarket = freshMarkets.find(item => item.id === ticket.marketId && item.available !== false);
+      if (!freshMarket) throw new Error("MyFundedPerps rule check: this market is no longer available.");
+      const freshCheck = platformRuleCheck({ account: freshAccount, policy: freshPolicy, market: freshMarket, ticket, openPositions: freshPositions });
+      if (!freshCheck.eligible) throw new Error(`MyFundedPerps rule check: ${freshCheck.problems.join(" ")}`);
       if (config.DRY_RUN) {
         await db.recordTradeExecution({ ticketId: ticket.id, telegramId: user.telegramId, accountId: ticket.accountId, symbol: ticket.symbol, side: ticket.side, notionalUsd: ticket.estimatedNotional, dryRun: true, status: "validated" });
         return json(response, 200, { dryRun: true, status: "validated" });
@@ -434,6 +449,7 @@ export function startMiniAppServer(config: Config, db: Database) {
     "/app/app-v15.js": { file: "app.js", type: "text/javascript; charset=utf-8" },
     "/app/app-v17.js": { file: "app.js", type: "text/javascript; charset=utf-8" },
     "/app/app-v18.js": { file: "app.js", type: "text/javascript; charset=utf-8" },
+    "/app/app-v19.js": { file: "app.js", type: "text/javascript; charset=utf-8" },
     "/app/styles.css": { file: "styles.css", type: "text/css; charset=utf-8" },
     "/app/styles-v3.css": { file: "styles.css", type: "text/css; charset=utf-8" },
     "/app/styles-v4.css": { file: "styles.css", type: "text/css; charset=utf-8" },
@@ -450,6 +466,7 @@ export function startMiniAppServer(config: Config, db: Database) {
     "/app/styles-v15.css": { file: "styles.css", type: "text/css; charset=utf-8" },
     "/app/styles-v17.css": { file: "styles.css", type: "text/css; charset=utf-8" },
     "/app/styles-v18.css": { file: "styles.css", type: "text/css; charset=utf-8" },
+    "/app/styles-v19.css": { file: "styles.css", type: "text/css; charset=utf-8" },
   };
 
   const server = createServer(async (request, response) => {

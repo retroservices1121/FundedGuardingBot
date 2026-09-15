@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { accountRisk, accountRuleProgress, buildTicket, calculateSize, guardAccount } from "../src/risk.js";
+import { accountRisk, accountRuleProgress, buildTicket, calculateSize, guardAccount, platformRuleCheck } from "../src/risk.js";
 
 describe("risk sizing", () => {
   it("sizes from dollars at risk and rounds down", () => {
@@ -64,6 +64,26 @@ describe("guardian", () => {
       { id: "a", status: "active", risk: { daily_loss_room: 2_000, max_loss_room: 3_000, marks_complete: true } },
       {}, 75, 100, 20,
     )).toEqual([]);
+  });
+
+  it("blocks account-specific notional, leverage, position, and collateral limits", () => {
+    const ticket = buildTicket({
+      id: "t", userId: 1, accountId: "a", market: { id: "gold", max_leverage: 3 }, symbol: "GOLD",
+      side: "buy", riskUsd: 150, quote: { bid: 4287, ask: 4288, mid: 4287.5, estimated_notional: 30_000, estimated_fee: 1.5 },
+      stopPercent: 0.5, rewardRisk: 2, leverage: 4, ttlSeconds: 45,
+    });
+    const check = platformRuleCheck({
+      account: { id: "a", status: "active", risk: { available_balance: 5_000 } },
+      policy: { limits: { max_position_value_usd: 25_000, max_open_positions: 1 } },
+      market: { id: "gold", max_leverage: 3 },
+      ticket,
+      openPositions: [{ id: "p", market_id: "btc" } as never],
+    });
+    expect(check.eligible).toBe(false);
+    expect(check.problems.join(" ")).toContain("exceeds the MyFundedPerps cap");
+    expect(check.problems.join(" ")).toContain("maximum of 3x");
+    expect(check.problems.join(" ")).toContain("reaches its limit of 1");
+    expect(check.problems.join(" ")).toContain("available balance");
   });
 
   it("can warn without enforcing user-configured limits", () => {

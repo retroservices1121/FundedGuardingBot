@@ -39,12 +39,32 @@ export function positionExitOrders(orders: WorkingOrder[], position: Position) {
       || (!order.position_id && !order.target_position_id && order.market_id === position.market_id)));
 }
 
+function detailText(value: unknown): string | undefined {
+  if (typeof value === "string" && value.trim()) return value.trim();
+  if (!value || typeof value !== "object") return undefined;
+  const record = value as Record<string, unknown>;
+  for (const key of ["rejection_reason", "reject_reason", "reason", "message", "detail"]) {
+    const text = detailText(record[key]);
+    if (text) return text;
+  }
+  return undefined;
+}
+
+export function orderRejectionReason(result: Record<string, unknown>): string | undefined {
+  const reason = detailText(result);
+  const reference = ["support_reference", "support_ref", "reference"]
+    .map(key => result[key]).find(value => typeof value === "string");
+  if (!reason && !reference) return undefined;
+  return [reason, reference ? `Reference: ${reference}` : undefined].filter(Boolean).join(" ");
+}
+
 export class MfpError extends Error {
   constructor(
     message: string,
     readonly status: number,
     readonly code?: string,
     readonly retryAfter?: string | null,
+    readonly details?: unknown,
   ) {
     super(message);
   }
@@ -73,11 +93,15 @@ export class MfpClient {
     };
     if (!response.ok) {
       const error = typeof payload.error === "object" ? payload.error : undefined;
+      const message = typeof payload.error === "string"
+        ? payload.error
+        : error?.message ?? detailText(error?.details) ?? `MyFundedPerps request failed (${response.status}).`;
       throw new MfpError(
-        error?.message ?? `MyFundedPerps request failed (${response.status}).`,
+        message,
         response.status,
         error?.code,
         response.headers.get("retry-after"),
+        error?.details,
       );
     }
     return (payload as ApiEnvelope<T>).data;
@@ -107,7 +131,7 @@ export class MfpClient {
     return this.request<Quote>(buildQuotePath(marketId, side, size));
   }
 
-  placeProtectedMarketOrder(input: {
+  async placeProtectedMarketOrder(input: {
     accountId: string;
     marketId: string;
     side: Side;
@@ -119,7 +143,7 @@ export class MfpClient {
     clientOrderId: string;
     idempotencyKey?: string;
   }) {
-    return this.request<Record<string, unknown>>("/v1/orders", {
+    const result = await this.request<Record<string, unknown>>("/v1/orders", {
       method: "POST",
       headers: { "Idempotency-Key": input.idempotencyKey ?? randomUUID() },
       body: JSON.stringify({
@@ -136,6 +160,11 @@ export class MfpClient {
         stop_loss_price: input.stopLossPrice,
       }),
     });
+    const status = String(result.status ?? "").toLowerCase();
+    if (["rejected", "failed", "denied"].includes(status)) {
+      throw new MfpError(orderRejectionReason(result) ?? "The order was rejected by the trading rules.", 422, typeof result.code === "string" ? result.code : undefined, null, result);
+    }
+    return result;
   }
 
   listOpenPositions(accountId: string) {
