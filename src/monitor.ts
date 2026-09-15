@@ -75,7 +75,8 @@ export function startGuardianMonitor(config: Config, db: Database, telegram: Api
               await telegram.sendMessage(user.telegramId, `🏁 Position closed\n\n${position.symbol || position.coin} ${position.side.toUpperCase()}\nRealized P&L: ${cash(position.realized_pnl)}\nFees: ${cash(position.fees)}`);
             }
             if (next.riskBand !== previous.riskBand && next.riskBand !== "normal") {
-              await telegram.sendMessage(user.telegramId, guardianRiskAlert(account, next.riskBand));
+              const alertBand = next.riskBand === "critical" ? "critical" : "warning";
+              await telegram.sendMessage(user.telegramId, guardianRiskAlert(account, alertBand));
             }
           }
           await db.saveMonitorState(user.telegramId, next);
