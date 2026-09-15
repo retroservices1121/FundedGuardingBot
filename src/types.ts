@@ -117,6 +117,7 @@ export interface TradingPolicy {
   copy_scope_blocked?: boolean;
   trading_halt?: { platform?: boolean; categories?: string[] };
   restriction?: { restriction?: string; reason?: string } | null;
+  account_rules?: unknown;
   limits?: {
     max_position_value_usd?: number;
     min_order_notional_usd?: number;

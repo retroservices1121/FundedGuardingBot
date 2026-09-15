@@ -7,7 +7,7 @@ import { SecretBox } from "./crypto.js";
 import { Database } from "./db.js";
 import { MfpClient, MfpError } from "./mfp.js";
 import { accountDailyPnl, automaticLockReason } from "./guardian.js";
-import { accountRisk, accountRuleProgress, buildTicket, calculateSize, guardAccount, platformRuleCheck, riskAllowance } from "./risk.js";
+import { accountRisk, accountRuleProgress, buildTicket, calculateSize, guardAccount, platformRuleCheck, resolveAccountRequirements, riskAllowance } from "./risk.js";
 import { createClosedPositionShareCard } from "./share-card.js";
 import { validateTelegramInitData, type TelegramMiniAppUser } from "./telegram-auth.js";
 import type { Market, PositionView, Side } from "./types.js";
@@ -172,7 +172,7 @@ export function startMiniAppServer(config: Config, db: Database) {
         stage: state.account.stage,
         balance: state.account.balance,
         startingBalance: state.account.starting_balance,
-        risk: accountRisk(state.account),
+        risk: { ...accountRisk(state.account), requirements: resolveAccountRequirements(state.account, policy) },
       },
       accounts: state.accounts.map((account) => ({ id: account.id, name: account.name ?? account.id, status: account.status })),
       safeToTrade: problems.length === 0,
@@ -182,7 +182,7 @@ export function startMiniAppServer(config: Config, db: Database) {
       workingOrders,
       dailyPnl,
       autoLockReason,
-      ruleProgress: accountRuleProgress(state.account),
+      ruleProgress: accountRuleProgress(state.account, policy),
       markets,
       dryRun: config.DRY_RUN,
     };

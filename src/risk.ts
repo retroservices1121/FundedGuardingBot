@@ -22,10 +22,63 @@ function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
 }
 
-export function accountRuleProgress(account: ChallengeAccount) {
+function ruleRecords(value: unknown): Record<string, unknown>[] {
+  if (Array.isArray(value)) return value.filter((item): item is Record<string, unknown> => !!item && typeof item === "object");
+  if (!value || typeof value !== "object") return [];
+  const record = value as Record<string, unknown>;
+  const nested = Object.entries(record).flatMap(([ruleId, item]) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) return [];
+    return [{ rule_id: ruleId, ...(item as Record<string, unknown>) }];
+  });
+  return [record, ...nested];
+}
+
+function percentFromRule(record: Record<string, unknown>) {
+  const sources = [
+    record,
+    record.parameters,
+    record.params,
+    record.config,
+  ].filter((item): item is Record<string, unknown> => !!item && typeof item === "object" && !Array.isArray(item));
+  for (const source of sources) {
+    for (const key of ["percentage", "percent", "pct", "limit_pct", "value_pct", "value"]) {
+      const value = finite(source[key]);
+      if (value !== undefined) return value;
+    }
+    for (const key of ["basis_points", "bps", "value_bps"]) {
+      const value = finite(source[key]);
+      if (value !== undefined) return value / 100;
+    }
+  }
+  return undefined;
+}
+
+export function resolveAccountRequirements(account: ChallengeAccount, policy?: TradingPolicy) {
+  const requirements = { ...(accountRisk(account).requirements ?? {}) };
+  const rules = ruleRecords(policy?.account_rules);
+  const direct = rules[0];
+  if (direct) {
+    for (const key of ["daily_loss_pct", "max_drawdown_pct", "profit_target_pct", "consistency_pct"] as const) {
+      const value = finite(direct[key]);
+      if (value !== undefined) requirements[key] = value;
+    }
+  }
+  for (const rule of rules) {
+    const id = [rule.id, rule.rule_id, rule.slug, rule.type, rule.name].filter(Boolean).join(" ").toLowerCase().replace(/[_-]+/g, " ");
+    const percent = percentFromRule(rule);
+    if (percent === undefined) continue;
+    if (id.includes("daily") && id.includes("loss")) requirements.daily_loss_pct = percent;
+    else if ((id.includes("drawdown") || id.includes("maximum loss") || id.includes("max loss"))) requirements.max_drawdown_pct = percent;
+    else if (id.includes("profit") && id.includes("target")) requirements.profit_target_pct = percent;
+    else if (id.includes("consistency")) requirements.consistency_pct = percent;
+  }
+  return requirements;
+}
+
+export function accountRuleProgress(account: ChallengeAccount, policy?: TradingPolicy) {
   const risk = accountRisk(account);
   const startingBalance = finite(account.starting_balance);
-  const requirement = risk.requirements ?? {};
+  const requirement = resolveAccountRequirements(account, policy);
   const amountFromPercent = (percent: unknown) => {
     const pct = finite(percent);
     return startingBalance !== undefined && pct !== undefined ? startingBalance * pct / 100 : undefined;

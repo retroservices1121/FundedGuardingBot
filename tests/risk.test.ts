@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { accountRisk, accountRuleProgress, buildTicket, calculateSize, guardAccount, platformRuleCheck } from "../src/risk.js";
+import { accountRisk, accountRuleProgress, buildTicket, calculateSize, guardAccount, platformRuleCheck, resolveAccountRequirements } from "../src/risk.js";
 
 describe("risk sizing", () => {
   it("sizes from dollars at risk and rounds down", () => {
@@ -45,6 +45,34 @@ describe("guardian", () => {
     expect(progress.profit).toMatchObject({ targetAmount: 8_000, achievedAmount: 3_420, achievedPercent: 42.75 });
     expect(progress.dailyLoss).toMatchObject({ limitAmount: 3_000, usedAmount: 1_500, usedPercent: 50 });
     expect(progress.maxDrawdown).toMatchObject({ limitAmount: 6_000, usedAmount: 1_500, usedPercent: 25 });
+  });
+
+  it("scales the same percentage rules to each account size", () => {
+    const policy = { account_rules: [
+      { rule_id: "daily-loss", parameters: { percent: 3 } },
+      { rule_id: "maximum-drawdown", parameters: { percent: 5 } },
+      { rule_id: "profit-target", parameters: { percent: 12 } },
+    ] };
+    const small = accountRuleProgress({ id: "25k", starting_balance: 25_000, risk: {} }, policy);
+    const large = accountRuleProgress({ id: "100k", starting_balance: 100_000, risk: {} }, policy);
+    expect(small.dailyLoss.limitAmount).toBe(750);
+    expect(small.maxDrawdown.limitAmount).toBe(1_250);
+    expect(small.profit.targetAmount).toBe(3_000);
+    expect(large.dailyLoss.limitAmount).toBe(3_000);
+    expect(large.maxDrawdown.limitAmount).toBe(5_000);
+    expect(large.profit.targetAmount).toBe(12_000);
+  });
+
+  it("prefers current account policy rules over a retired risk snapshot", () => {
+    const requirements = resolveAccountRequirements(
+      { id: "a", risk: { requirements: { profit_target_pct: 9, max_drawdown_pct: 3 } } },
+      { account_rules: {
+        "profit-target": { parameters: { percentage: 10 } },
+        "maximum-drawdown": { parameters: { basis_points: 600 } },
+      } },
+    );
+    expect(requirements.profit_target_pct).toBe(10);
+    expect(requirements.max_drawdown_pct).toBe(6);
   });
 
   it("blocks excessive risk and policy restrictions", () => {
