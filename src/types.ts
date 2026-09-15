@@ -122,9 +122,11 @@ export interface TradingPolicy {
     max_position_value_usd?: number;
     min_order_notional_usd?: number;
     max_open_positions?: number;
+    max_leverage?: number;
     trades_per_day?: number;
     [key: string]: unknown;
   };
+  maximum_total_notional_usd?: number | null;
   [key: string]: unknown;
 }
 

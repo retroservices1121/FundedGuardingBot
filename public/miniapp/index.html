@@ -5,9 +5,9 @@
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
   <meta name="theme-color" content="#07100c">
   <title>Funded Guardian</title>
-  <link rel="stylesheet" href="/app/styles-v19.css">
+  <link rel="stylesheet" href="/app/styles-v20.css">
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
-  <script src="/app/app-v19.js" defer></script>
+  <script src="/app/app-v20.js" defer></script>
 </head>
 <body>
   <div class="shell">
@@ -164,15 +164,21 @@
           <div class="book-balance"><i id="bidDepth"></i><i id="askDepth"></i></div>
         </article>
         <article class="ticket-control">
-          <div class="label-row"><span>Risk at stop</span><strong id="riskValue">$75</strong></div>
+          <div class="label-row"><span>Active risk at stop</span><strong id="riskValue">$75</strong></div>
           <div class="risk-options" id="riskOptions"></div>
           <div class="custom-risk"><label for="customRisk">Custom risk</label><div><span>$</span><input id="customRisk" type="number" inputmode="decimal" min="1" step="0.01" placeholder="65"><button id="applyCustomRisk" type="button">Use amount</button></div></div>
           <p class="risk-allowance" id="riskAllowance">Checking your current Guardian allowance…</p>
-          <div class="trade-summary">
+          <div class="trade-summary editable">
             <div><span>Stop distance</span><strong id="stopValue">—</strong></div>
             <div><span>Reward / risk</span><strong id="rewardValue">—</strong></div>
-            <div><span>Leverage</span><strong id="leverageValue">—</strong></div>
+            <label class="leverage-control"><span>Leverage</span><select id="tradeLeverage" aria-label="Trade leverage"></select></label>
           </div>
+          <div class="trade-estimate" id="tradeEstimate">
+            <div><span>Estimated notional</span><strong id="estimatedNotional">—</strong></div>
+            <div><span>Estimated margin</span><strong id="estimatedMargin">—</strong></div>
+            <div><span>Approx. maximum risk</span><strong id="affordableRisk">—</strong></div>
+          </div>
+          <p class="estimate-note" id="estimateNote">Estimates update with risk and leverage.</p>
           <button class="primary" id="reviewTrade">Review protected trade</button>
           <p class="fine-print">Guardian checks the account again before creating a quote. Nothing is submitted without confirmation.</p>
         </article>

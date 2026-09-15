@@ -132,6 +132,7 @@ export function startMiniAppServer(config: Config, db: Database) {
         coin: marketCoin(market),
         provider: marketProvider(market),
         category: typeof market.category === "string" ? market.category : undefined,
+        maxLeverage: typeof market.max_leverage === "number" ? market.max_leverage : undefined,
       }))
       .sort((a, b) => a.symbol.localeCompare(b.symbol) || a.provider.localeCompare(b.provider));
     const problems = guardAccount(
@@ -183,6 +184,11 @@ export function startMiniAppServer(config: Config, db: Database) {
       dailyPnl,
       autoLockReason,
       ruleProgress: accountRuleProgress(state.account, policy),
+      tradeLimits: {
+        maxLeverage: typeof policy.limits?.max_leverage === "number" ? policy.limits.max_leverage : undefined,
+        maxPositionNotional: policy.limits?.max_position_value_usd,
+        maximumTotalNotional: typeof policy.maximum_total_notional_usd === "number" ? policy.maximum_total_notional_usd : undefined,
+      },
       markets,
       dryRun: config.DRY_RUN,
     };
@@ -193,9 +199,13 @@ export function startMiniAppServer(config: Config, db: Database) {
     const marketId = String(payload.marketId ?? "");
     const side = payload.side === "buy" || payload.side === "sell" ? payload.side : undefined;
     const requestedRisk = Number(payload.riskUsd ?? state.user.riskUsd);
+    const requestedLeverage = Number(payload.leverage ?? state.user.leverage);
     if (!side || !marketId) throw new Error("Choose a market and a direction.");
     if (!Number.isFinite(requestedRisk) || requestedRisk <= 0 || requestedRisk > 100_000) {
       throw new Error("Risk must be between $1 and $100,000.");
+    }
+    if (!Number.isInteger(requestedLeverage) || requestedLeverage < 1 || requestedLeverage > 100) {
+      throw new Error("Leverage must be a whole number between 1x and 100x.");
     }
     const autoLockReason = automaticLockReason(state.user, accountDailyPnl(state.account));
     if (autoLockReason) {
@@ -229,7 +239,7 @@ export function startMiniAppServer(config: Config, db: Database) {
       quote,
       stopPercent: state.user.stopPercent,
       rewardRisk: state.user.rewardRisk,
-      leverage: state.user.leverage,
+      leverage: requestedLeverage,
       ttlSeconds: config.CONFIRMATION_TTL_SECONDS,
     });
     if (!state.user.enforceGuardrails) {
@@ -299,7 +309,7 @@ export function startMiniAppServer(config: Config, db: Database) {
       const payload = await body(request);
       const risk = Number(payload.riskUsd);
       if (!Number.isFinite(risk) || risk <= 0 || risk > 100_000) throw new Error("Risk must be between $1 and $100,000.");
-      if (user.enforceGuardrails && risk > user.maxRiskUsd) throw new Error(`Risk exceeds your $${user.maxRiskUsd} personal threshold.`);
+      if (user.enforceGuardrails && risk > user.maxRiskUsd) throw new Error(`Risk exceeds your $${user.maxRiskUsd} maximum risk per trade.`);
       await db.updateRisk(user.telegramId, risk);
       return json(response, 200, { riskUsd: risk });
     }
@@ -450,6 +460,7 @@ export function startMiniAppServer(config: Config, db: Database) {
     "/app/app-v17.js": { file: "app.js", type: "text/javascript; charset=utf-8" },
     "/app/app-v18.js": { file: "app.js", type: "text/javascript; charset=utf-8" },
     "/app/app-v19.js": { file: "app.js", type: "text/javascript; charset=utf-8" },
+    "/app/app-v20.js": { file: "app.js", type: "text/javascript; charset=utf-8" },
     "/app/styles.css": { file: "styles.css", type: "text/css; charset=utf-8" },
     "/app/styles-v3.css": { file: "styles.css", type: "text/css; charset=utf-8" },
     "/app/styles-v4.css": { file: "styles.css", type: "text/css; charset=utf-8" },
@@ -467,6 +478,7 @@ export function startMiniAppServer(config: Config, db: Database) {
     "/app/styles-v17.css": { file: "styles.css", type: "text/css; charset=utf-8" },
     "/app/styles-v18.css": { file: "styles.css", type: "text/css; charset=utf-8" },
     "/app/styles-v19.css": { file: "styles.css", type: "text/css; charset=utf-8" },
+    "/app/styles-v20.css": { file: "styles.css", type: "text/css; charset=utf-8" },
   };
 
   const server = createServer(async (request, response) => {
