@@ -5,9 +5,9 @@
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
   <meta name="theme-color" content="#07100c">
   <title>Funded Guardian</title>
-  <link rel="stylesheet" href="/app/styles-v20.css">
+  <link rel="stylesheet" href="/app/styles-v21.css">
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
-  <script src="/app/app-v20.js" defer></script>
+  <script src="/app/app-v21.js" defer></script>
 </head>
 <body>
   <div class="shell">
@@ -212,6 +212,45 @@
         <div id="historyList" class="stack"></div>
       </section>
 
+      <section class="view" data-view="learn">
+        <div class="section-title"><div><span class="eyebrow">PERSONALIZED EDUCATION</span><h2>Learn with your account</h2></div></div>
+        <article class="learn-account-card">
+          <span id="learnAccountName">Your challenge</span>
+          <strong id="learnAccountSize">—</strong>
+          <p id="learnAccountRules">Loading the rules for this account…</p>
+        </article>
+        <article class="learn-lab">
+          <div><span class="eyebrow">INTERACTIVE TRADE LAB</span><h3>What would this trade mean?</h3><p>Change the example below. This does not create or recommend a trade.</p></div>
+          <div class="learn-inputs">
+            <label>Margin used <span id="learnMarginLabel">$500</span><input id="learnMargin" type="range" min="10" max="5000" step="10" value="500"></label>
+            <label>Leverage <span id="learnLeverageLabel">5x</span><input id="learnLeverage" type="range" min="1" max="20" step="1" value="5"></label>
+            <label>Stop-loss distance <span id="learnStopLabel">2%</span><input id="learnStop" type="range" min="0.1" max="20" step="0.1" value="2"></label>
+            <label>Take-profit distance <span id="learnTakeLabel">4%</span><input id="learnTake" type="range" min="0.1" max="40" step="0.1" value="4"></label>
+          </div>
+          <div class="learn-equation"><span>Your margin</span><b>×</b><span>Leverage</span><b>=</b><strong id="learnNotional">—</strong><small>market exposure</small></div>
+          <div class="learn-results">
+            <div><span>If stop loss is reached</span><strong class="negative" id="learnLoss">—</strong><small id="learnLossBalance">—</small></div>
+            <div><span>If take profit is reached</span><strong class="positive" id="learnProfit">—</strong><small id="learnProfitBalance">—</small></div>
+          </div>
+          <div class="learn-impact">
+            <div><span>Daily-loss room after example loss</span><strong id="learnDailyRoom">—</strong><i id="learnDailyBar"></i></div>
+            <div><span>Drawdown room after example loss</span><strong id="learnDrawdownRoom">—</strong><i id="learnDrawdownBar"></i></div>
+            <div><span>Profit target remaining after example win</span><strong id="learnTargetRemaining">—</strong></div>
+          </div>
+          <p class="learn-explainer" id="learnExplanation"></p>
+        </article>
+        <div class="section-title sub-section"><div><span class="eyebrow">THE BASICS</span><h2>Tap to understand</h2></div></div>
+        <div class="learn-topics">
+          <details open><summary>Margin</summary><p>Margin is the account balance set aside to support a position. It is not automatically the most you can lose. Your stop, position size, fees, slippage and liquidation determine the actual result.</p></details>
+          <details><summary>Leverage</summary><p>Leverage multiplies market exposure. $500 of margin at 5x controls about $2,500. A 1% market move then changes the position by about $25 before fees.</p></details>
+          <details><summary>Stop loss</summary><p>A stop loss requests an exit after price reaches a chosen level. It can limit risk, but the fill can differ during fast markets or thin liquidity.</p></details>
+          <details><summary>Take profit</summary><p>A take-profit order requests an exit after price reaches a profitable level. It turns a target into an order, but it does not guarantee a fill.</p></details>
+          <details><summary>Daily loss and drawdown</summary><p>Daily loss room measures what remains before the daily floor. Drawdown room measures what remains before the account’s broader loss floor. The connected account data above determines both examples.</p></details>
+          <details><summary>Fees and liquidation</summary><p>Entry and exit fees reduce the result. Liquidation can occur when losses consume the margin supporting a leveraged position. Exact liquidation depends on the platform, maintenance margin and account mode.</p></details>
+        </div>
+        <p class="settings-disclaimer">Educational simulation only. Results exclude fees, funding, slippage and changing market conditions. Funded Guardian does not provide financial or trading advice.</p>
+      </section>
+
       <section class="view" data-view="settings">
         <div class="section-title"><div><span class="eyebrow">GUARDIAN PREFERENCES</span><h2>Settings</h2></div></div>
         <article class="connection-card"><div><span class="eyebrow">MYFUNDEDPERPS CONNECTION</span><strong id="connectionLabel">Connected</strong><p id="connectionDetail">API key secured</p></div><span class="connection-dot"></span></article>
@@ -262,6 +301,7 @@
       <button data-tab="markets"><i>⌁</i><span>Markets</span></button>
       <button data-tab="trade"><i>↗</i><span>Trade</span></button>
       <button data-tab="positions"><i>◎</i><span>Activity</span></button>
+      <button data-tab="learn"><i>?</i><span>Learn</span></button>
       <button data-tab="settings"><i>⚙</i><span>Settings</span></button>
     </nav>
   </div>
