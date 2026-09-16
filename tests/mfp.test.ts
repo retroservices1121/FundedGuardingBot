@@ -40,17 +40,17 @@ describe("position lifecycle requests", () => {
   it("submits a partial reduce-only position close", async () => {
     const request = vi.fn().mockResolvedValue(new Response(JSON.stringify({ data: { status: "pending" } }), { status: 200, headers: { "Content-Type": "application/json" } }));
     vi.stubGlobal("fetch", request);
-    await new MfpClient("https://example.test", "secret").closePosition("position/1", 0.25, "close-key");
+    await new MfpClient("https://example.test", "secret").closePosition("position/1", 0.25, 101.5, "close-key");
     expect(request.mock.calls[0]![0]).toBe("https://example.test/v1/positions/position%2F1/close");
-    expect(JSON.parse(request.mock.calls[0]![1].body)).toEqual({ size: 0.25 });
+    expect(JSON.parse(request.mock.calls[0]![1].body)).toEqual({ expected_price: 101.5, size: 0.25 });
     expect(request.mock.calls[0]![1].headers["Idempotency-Key"]).toBe("close-key");
   });
 
-  it("omits all optional fields for a complete position close", async () => {
+  it("omits size but includes the required expected price for a complete close", async () => {
     const request = vi.fn().mockResolvedValue(new Response(JSON.stringify({ data: { status: "pending" } }), { status: 200, headers: { "Content-Type": "application/json" } }));
     vi.stubGlobal("fetch", request);
-    await new MfpClient("https://example.test", "secret").closePosition("position-1", undefined, "close-all-key");
-    expect(JSON.parse(request.mock.calls[0]![1].body)).toEqual({});
+    await new MfpClient("https://example.test", "secret").closePosition("position-1", undefined, 99.5, "close-all-key");
+    expect(JSON.parse(request.mock.calls[0]![1].body)).toEqual({ expected_price: 99.5 });
   });
 
   it("replaces existing protection with one atomic OCO operation", async () => {

@@ -198,12 +198,13 @@ export class MfpClient {
     return this.request<Record<string, unknown>>(`/v1/orders/${encodeURIComponent(orderId)}`, { method: "DELETE" });
   }
 
-  closePosition(positionId: string, size?: number, idempotencyKey: string = randomUUID()) {
+  closePosition(positionId: string, size: number | undefined, expectedPrice: number, idempotencyKey: string = randomUUID()) {
     if (size !== undefined && (!Number.isFinite(size) || size <= 0)) throw new Error("Close size must be positive.");
+    if (!Number.isFinite(expectedPrice) || expectedPrice <= 0) throw new Error("Expected close price must be positive.");
     return this.request<Record<string, unknown>>(`/v1/positions/${encodeURIComponent(positionId)}/close`, {
       method: "POST",
       headers: { "Idempotency-Key": idempotencyKey },
-      body: JSON.stringify(size === undefined ? {} : { size }),
+      body: JSON.stringify({ expected_price: expectedPrice, ...(size === undefined ? {} : { size }) }),
     });
   }
 

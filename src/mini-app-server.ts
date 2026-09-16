@@ -399,7 +399,13 @@ export function startMiniAppServer(config: Config, db: Database) {
       const factor = 10 ** precision;
       const size = percent === 100 ? undefined : Math.floor(position.size * percent / 100 * factor) / factor;
       if (size !== undefined && size <= 0) throw new Error("This partial close is below the market's minimum size. Use Close all instead.");
-      const result = await state.client.closePosition(position.id, size);
+      const closeSide = position.side === "long" ? "sell" : "buy";
+      const closeSize = size ?? position.size;
+      const quote = await state.client.getQuote(position.market_id, closeSide, closeSize);
+      if (quote.fillable === false) throw new Error("MyFundedPerps cannot currently fill this close size. Try again or close a smaller amount.");
+      const expectedPrice = quote.estimated_fill_price ?? (closeSide === "sell" ? quote.bid : quote.ask) ?? quote.mid;
+      if (!Number.isFinite(expectedPrice) || expectedPrice <= 0) throw new Error("A valid close price is not currently available. Refresh and try again.");
+      const result = await state.client.closePosition(position.id, size, expectedPrice);
       return json(response, 200, { dryRun: false, status: result?.status ?? "pending" });
     }
     const protectionMatch = pathname.match(/^\/api\/positions\/([^/]+)\/protection$/);
