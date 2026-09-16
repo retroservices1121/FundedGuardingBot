@@ -42,8 +42,15 @@ describe("position lifecycle requests", () => {
     vi.stubGlobal("fetch", request);
     await new MfpClient("https://example.test", "secret").closePosition("position/1", 0.25, "close-key");
     expect(request.mock.calls[0]![0]).toBe("https://example.test/v1/positions/position%2F1/close");
-    expect(JSON.parse(request.mock.calls[0]![1].body)).toMatchObject({ type: "market", size: 0.25 });
+    expect(JSON.parse(request.mock.calls[0]![1].body)).toEqual({ size: 0.25 });
     expect(request.mock.calls[0]![1].headers["Idempotency-Key"]).toBe("close-key");
+  });
+
+  it("omits all optional fields for a complete position close", async () => {
+    const request = vi.fn().mockResolvedValue(new Response(JSON.stringify({ data: { status: "pending" } }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", request);
+    await new MfpClient("https://example.test", "secret").closePosition("position-1", undefined, "close-all-key");
+    expect(JSON.parse(request.mock.calls[0]![1].body)).toEqual({});
   });
 
   it("replaces existing protection with one atomic OCO operation", async () => {

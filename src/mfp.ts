@@ -43,7 +43,7 @@ function detailText(value: unknown): string | undefined {
   if (typeof value === "string" && value.trim()) return value.trim();
   if (!value || typeof value !== "object") return undefined;
   const record = value as Record<string, unknown>;
-  for (const key of ["rejection_reason", "reject_reason", "reason", "message", "detail"]) {
+  for (const key of ["rejection_reason", "reject_reason", "reason", "message", "detail", "issue"]) {
     const text = detailText(record[key]);
     if (text) return text;
   }
@@ -93,9 +93,19 @@ export class MfpClient {
     };
     if (!response.ok) {
       const error = typeof payload.error === "object" ? payload.error : undefined;
-      const message = typeof payload.error === "string"
+      const baseMessage = typeof payload.error === "string"
         ? payload.error
         : error?.message ?? detailText(error?.details) ?? `MyFundedPerps request failed (${response.status}).`;
+      const fieldDetail = Array.isArray(error?.details)
+        ? error.details.map((item) => {
+          if (!item || typeof item !== "object") return detailText(item);
+          const detail = item as Record<string, unknown>;
+          const field = typeof detail.field === "string" ? detail.field : undefined;
+          const issue = detailText(detail.issue ?? detail);
+          return [field, issue].filter(Boolean).join(": ");
+        }).filter(Boolean).join("; ")
+        : undefined;
+      const message = fieldDetail && !baseMessage.includes(fieldDetail) ? `${baseMessage} ${fieldDetail}` : baseMessage;
       throw new MfpError(
         message,
         response.status,
@@ -193,7 +203,7 @@ export class MfpClient {
     return this.request<Record<string, unknown>>(`/v1/positions/${encodeURIComponent(positionId)}/close`, {
       method: "POST",
       headers: { "Idempotency-Key": idempotencyKey },
-      body: JSON.stringify({ type: "market", ...(size === undefined ? {} : { size }), client_order_id: `guardian-close-${randomUUID().slice(0, 12)}` }),
+      body: JSON.stringify(size === undefined ? {} : { size }),
     });
   }
 

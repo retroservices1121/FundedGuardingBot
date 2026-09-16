@@ -385,12 +385,20 @@ export function startMiniAppServer(config: Config, db: Database) {
       const state = await selectedAccount(request);
       const payload = await body(request);
       const positionId = decodeURIComponent(closeMatch[1]!);
-      const position = (await state.client.listOpenPositions(state.account.id)).find(item => item.id === positionId);
+      const [positions, markets] = await Promise.all([
+        state.client.listOpenPositions(state.account.id),
+        state.client.listMarkets(),
+      ]);
+      const position = positions.find(item => item.id === positionId);
       if (!position) throw new Error("That open position is unavailable. Refresh and try again.");
       const percent = Number(payload.percent);
       if (![25, 50, 75, 100].includes(percent)) throw new Error("Choose 25%, 50%, 75%, or 100%.");
       if (config.DRY_RUN) return json(response, 200, { dryRun: true, status: "validated" });
-      const size = percent === 100 ? undefined : Number((position.size * percent / 100).toPrecision(12));
+      const market = markets.find(item => item.id === position.market_id || item.market_id === position.market_id);
+      const precision = market?.size_precision ?? market?.quantity_precision ?? 8;
+      const factor = 10 ** precision;
+      const size = percent === 100 ? undefined : Math.floor(position.size * percent / 100 * factor) / factor;
+      if (size !== undefined && size <= 0) throw new Error("This partial close is below the market's minimum size. Use Close all instead.");
       const result = await state.client.closePosition(position.id, size);
       return json(response, 200, { dryRun: false, status: result?.status ?? "pending" });
     }
