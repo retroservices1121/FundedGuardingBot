@@ -5,9 +5,9 @@
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
   <meta name="theme-color" content="#07100c">
   <title>Funded Guardian</title>
-  <link rel="stylesheet" href="/app/styles-v21.css">
+  <link rel="stylesheet" href="/app/styles-v22.css">
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
-  <script src="/app/app-v21.js" defer></script>
+  <script src="/app/app-v22.js" defer></script>
 </head>
 <body>
   <div class="shell">
@@ -222,7 +222,7 @@
         <article class="learn-lab">
           <div><span class="eyebrow">INTERACTIVE TRADE LAB</span><h3>What would this trade mean?</h3><p>Change the example below. This does not create or recommend a trade.</p></div>
           <div class="learn-inputs">
-            <label>Margin used <span id="learnMarginLabel">$500</span><input id="learnMargin" type="range" min="10" max="5000" step="10" value="500"></label>
+            <label class="learn-amount-input">Amount you would put into the trade <span>Margin</span><div><b>$</b><input id="learnMarginAmount" type="number" inputmode="decimal" min="1" max="100000" step="1" value="500"></div><input id="learnMargin" type="range" min="1" max="5000" step="1" value="500"><small id="learnMarginLabel">$500 margin selected</small></label>
             <label>Leverage <span id="learnLeverageLabel">5x</span><input id="learnLeverage" type="range" min="1" max="20" step="1" value="5"></label>
             <label>Stop-loss distance <span id="learnStopLabel">2%</span><input id="learnStop" type="range" min="0.1" max="20" step="0.1" value="2"></label>
             <label>Take-profit distance <span id="learnTakeLabel">4%</span><input id="learnTake" type="range" min="0.1" max="40" step="0.1" value="4"></label>
