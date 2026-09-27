@@ -5,7 +5,7 @@ import path from "node:path";
 import type { Config } from "./config.js";
 import { SecretBox } from "./crypto.js";
 import { Database } from "./db.js";
-import { MfpClient, MfpError } from "./mfp.js";
+import { isActiveAccount, MfpClient, MfpError } from "./mfp.js";
 import { accountDailyPnl, automaticLockReason } from "./guardian.js";
 import { accountRisk, accountRuleProgress, buildTicket, calculateSize, guardAccount, platformRuleCheck, resolveAccountRequirements, riskAllowance } from "./risk.js";
 import { createClosedPositionShareCard } from "./share-card.js";
@@ -82,10 +82,11 @@ export function startMiniAppServer(config: Config, db: Database) {
 
   async function selectedAccount(request: IncomingMessage) {
     const state = await session(request);
-    const accounts = await state.client.listAccounts();
+    const accounts = (await state.client.listAccounts()).filter(isActiveAccount);
+    if (!accounts.length) throw new Error("No active MyFundedPerps challenge account was found.");
     let accountId = state.user.selectedAccountId;
     if (!accountId || !accounts.some((account) => account.id === accountId)) {
-      const preferred = accounts.find((account) => ["active", "trading"].includes(String(account.status).toLowerCase())) ?? accounts[0];
+      const preferred = accounts[0];
       if (!preferred) throw new Error("No accessible challenge account was found.");
       accountId = preferred.id;
       await db.setSelectedAccount(state.user.telegramId, accountId);
@@ -276,9 +277,9 @@ export function startMiniAppServer(config: Config, db: Database) {
       const environment = key.startsWith("fp_test_") ? "sandbox" : "live";
       if (environment === "live" && !config.ALLOW_LIVE_TRADING) throw new Error("Live connections are not enabled. Use a sandbox key or contact the bot owner.");
       const client = new MfpClient(HOSTS[environment], key);
-      const accounts = await client.listAccounts();
-      if (!accounts?.length) throw new Error("This key has no accessible accounts. Check its account access in MyFundedPerps.");
-      const preferred = accounts.find(item => ["active", "trading"].includes(String(item.status).toLowerCase())) ?? accounts[0]!;
+      const accounts = (await client.listAccounts()).filter(isActiveAccount);
+      if (!accounts.length) throw new Error("This key has no active challenge accounts. Failed and inactive accounts are hidden.");
+      const preferred = accounts[0]!;
       await db.saveConnection(user.telegramId, { environment, encryptedApiKey: secrets.encrypt(key), keyLastFour: key.slice(-4) });
       await db.setSelectedAccount(user.telegramId, preferred.id);
       await db.setOnboardingState(user.telegramId, "choose_guardrails");
@@ -291,7 +292,7 @@ export function startMiniAppServer(config: Config, db: Database) {
       const state = await session(request);
       const payload = await body(request);
       const accountId = String(payload.accountId ?? "");
-      const accounts = await state.client.listAccounts();
+      const accounts = (await state.client.listAccounts()).filter(isActiveAccount);
       if (!accounts.some((account) => account.id === accountId)) throw new Error("That account is unavailable.");
       await db.setSelectedAccount(state.user.telegramId, accountId);
       return json(response, 200, { ok: true });

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { buildQuotePath, MfpClient, normalizeMarkets, orderPrice, orderRejectionReason, positionExitOrders } from "../src/mfp.js";
+import { buildQuotePath, isActiveAccount, MfpClient, normalizeMarkets, orderPrice, orderRejectionReason, positionExitOrders } from "../src/mfp.js";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -19,6 +19,18 @@ describe("market response normalization", () => {
     ])).toEqual([
       { id: "binance|ETHUSDT", market_id: undefined, symbol: "ETH" },
     ]);
+  });
+});
+
+describe("account visibility", () => {
+  it("shows only active or trading accounts", () => {
+    expect([
+      { id: "a", status: "active" },
+      { id: "b", status: "TRADING" },
+      { id: "c", status: "failed" },
+      { id: "d", status: "breached" },
+      { id: "e", status: "closed" },
+    ].filter(account => isActiveAccount(account as never)).map(account => account.id)).toEqual(["a", "b"]);
   });
 });
 
