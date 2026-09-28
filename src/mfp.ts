@@ -11,6 +11,11 @@ export function isActiveAccount(account: ChallengeAccount) {
   return ["active", "trading"].includes(String(account.status ?? "").trim().toLowerCase());
 }
 
+export function isPassedAccount(account: ChallengeAccount) {
+  return String(account.status ?? "").trim().toLowerCase() === "passed"
+    && String(account.stage ?? "").trim().toLowerCase() === "evaluation";
+}
+
 export function normalizeMarkets(markets: RawMarket[]): Market[] {
   return markets.flatMap((market) => {
     const id = typeof market.id === "string"

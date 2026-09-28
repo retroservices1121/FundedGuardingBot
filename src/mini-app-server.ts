@@ -5,12 +5,13 @@ import path from "node:path";
 import type { Config } from "./config.js";
 import { SecretBox } from "./crypto.js";
 import { Database } from "./db.js";
-import { isActiveAccount, MfpClient, MfpError } from "./mfp.js";
+import { isActiveAccount, isPassedAccount, MfpClient, MfpError } from "./mfp.js";
 import { accountDailyPnl, automaticLockReason } from "./guardian.js";
 import { accountRisk, accountRuleProgress, buildTicket, calculateSize, guardAccount, platformRuleCheck, resolveAccountRequirements, riskAllowance } from "./risk.js";
 import { createClosedPositionShareCard } from "./share-card.js";
+import { createPassedAccountCard } from "./passed-card.js";
 import { validateTelegramInitData, type TelegramMiniAppUser } from "./telegram-auth.js";
-import type { Market, PositionView, Side } from "./types.js";
+import type { Market, PositionView, Side, TradingPolicy } from "./types.js";
 
 const HOSTS = {
   sandbox: "https://sandbox.myfundedperpetuals.com",
@@ -82,11 +83,11 @@ export function startMiniAppServer(config: Config, db: Database) {
 
   async function selectedAccount(request: IncomingMessage) {
     const state = await session(request);
-    const accounts = (await state.client.listAccounts()).filter(isActiveAccount);
-    if (!accounts.length) throw new Error("No active MyFundedPerps challenge account was found.");
+    const accounts = (await state.client.listAccounts()).filter(account => isActiveAccount(account) || isPassedAccount(account));
+    if (!accounts.length) throw new Error("No active or passed MyFundedPerps account was found.");
     let accountId = state.user.selectedAccountId;
     if (!accountId || !accounts.some((account) => account.id === accountId)) {
-      const preferred = accounts[0];
+      const preferred = accounts.find(isActiveAccount) ?? accounts[0];
       if (!preferred) throw new Error("No accessible challenge account was found.");
       accountId = preferred.id;
       await db.setSelectedAccount(state.user.telegramId, accountId);
@@ -96,11 +97,12 @@ export function startMiniAppServer(config: Config, db: Database) {
 
   async function dashboard(request: IncomingMessage) {
     const state = await selectedAccount(request);
+    const active = isActiveAccount(state.account);
     const [policy, openPositions, closedPositions, workingOrders, allMarkets] = await Promise.all([
-      state.client.getTradingPolicy(state.account.id),
-      state.client.listOpenPositions(state.account.id),
-      state.client.listClosedPositions(state.account.id, 10),
-      state.client.listWorkingOrders(state.account.id),
+      active ? state.client.getTradingPolicy(state.account.id) : Promise.resolve({} as TradingPolicy),
+      active ? state.client.listOpenPositions(state.account.id) : Promise.resolve([]),
+      state.client.listClosedPositions(state.account.id, 10).catch(error => { if (active) throw error; return []; }),
+      active ? state.client.listWorkingOrders(state.account.id) : Promise.resolve([]),
       state.client.listMarkets(),
     ]);
 
@@ -136,16 +138,16 @@ export function startMiniAppServer(config: Config, db: Database) {
         maxLeverage: typeof market.max_leverage === "number" ? market.max_leverage : undefined,
       }))
       .sort((a, b) => a.symbol.localeCompare(b.symbol) || a.provider.localeCompare(b.provider));
-    const problems = guardAccount(
+    const problems = active ? guardAccount(
       state.account,
       policy,
       state.user.riskUsd,
       state.user.maxRiskUsd,
       state.user.maxLossRoomUsagePercent,
       state.user.guardianMode === "enforce",
-    );
+    ) : ["This evaluation has passed. Continue the funding steps on MyFundedPerps."];
     const dailyPnl = accountDailyPnl(state.account);
-    const autoLockReason = automaticLockReason(state.user, dailyPnl);
+    const autoLockReason = active ? automaticLockReason(state.user, dailyPnl) : undefined;
     let lockedUntil = state.user.lockedUntil;
     if (autoLockReason && (!lockedUntil || lockedUntil.getTime() <= Date.now())) lockedUntil = await db.lockUntilTomorrow(state.user.telegramId);
     if (lockedUntil && lockedUntil.getTime() > Date.now()) problems.unshift(`${autoLockReason ?? "Trading is locked"} until the next New York trading day.`);
@@ -177,7 +179,8 @@ export function startMiniAppServer(config: Config, db: Database) {
         startingBalance: state.account.starting_balance,
         risk: { ...accountRisk(state.account), requirements: resolveAccountRequirements(state.account, policy) },
       },
-      accounts: state.accounts.map((account) => ({ id: account.id, name: account.name ?? account.id, status: account.status })),
+      accounts: state.accounts.map((account) => ({ id: account.id, name: account.name ?? account.id, status: account.status, stage: account.stage })),
+      passed: isPassedAccount(state.account),
       safeToTrade: problems.length === 0,
       problems,
       positions,
@@ -198,6 +201,7 @@ export function startMiniAppServer(config: Config, db: Database) {
 
   async function createTicket(request: IncomingMessage, payload: Record<string, unknown>) {
     const state = await selectedAccount(request);
+    if (!isActiveAccount(state.account)) throw new Error("This account is not active for trading. Select an active account.");
     const marketId = String(payload.marketId ?? "");
     const side = payload.side === "buy" || payload.side === "sell" ? payload.side : undefined;
     const requestedRisk = Number(payload.riskUsd ?? state.user.riskUsd);
@@ -277,9 +281,9 @@ export function startMiniAppServer(config: Config, db: Database) {
       const environment = key.startsWith("fp_test_") ? "sandbox" : "live";
       if (environment === "live" && !config.ALLOW_LIVE_TRADING) throw new Error("Live connections are not enabled. Use a sandbox key or contact the bot owner.");
       const client = new MfpClient(HOSTS[environment], key);
-      const accounts = (await client.listAccounts()).filter(isActiveAccount);
-      if (!accounts.length) throw new Error("This key has no active challenge accounts. Failed and inactive accounts are hidden.");
-      const preferred = accounts[0]!;
+      const accounts = (await client.listAccounts()).filter(account => isActiveAccount(account) || isPassedAccount(account));
+      if (!accounts.length) throw new Error("This key has no active or passed challenge accounts.");
+      const preferred = accounts.find(isActiveAccount) ?? accounts[0]!;
       await db.saveConnection(user.telegramId, { environment, encryptedApiKey: secrets.encrypt(key), keyLastFour: key.slice(-4) });
       await db.setSelectedAccount(user.telegramId, preferred.id);
       await db.setOnboardingState(user.telegramId, "choose_guardrails");
@@ -292,10 +296,28 @@ export function startMiniAppServer(config: Config, db: Database) {
       const state = await session(request);
       const payload = await body(request);
       const accountId = String(payload.accountId ?? "");
-      const accounts = (await state.client.listAccounts()).filter(isActiveAccount);
+      const accounts = (await state.client.listAccounts()).filter(account => isActiveAccount(account) || isPassedAccount(account));
       if (!accounts.some((account) => account.id === accountId)) throw new Error("That account is unavailable.");
       await db.setSelectedAccount(state.user.telegramId, accountId);
       return json(response, 200, { ok: true });
+    }
+    const milestoneMatch = pathname.match(/^\/api\/accounts\/([^/]+)\/milestone$/);
+    if (request.method === "GET" && milestoneMatch) {
+      const state = await session(request);
+      const accountId = decodeURIComponent(milestoneMatch[1]!);
+      const listed = (await state.client.listAccounts()).find(account => account.id === accountId && isPassedAccount(account));
+      if (!listed) throw new Error("A passed evaluation is required for this celebration card.");
+      const account = await state.client.getAccount(accountId);
+      if (!isPassedAccount(account)) throw new Error("This evaluation is not marked passed by MyFundedPerps.");
+      const image = await createPassedAccountCard(account, state.telegram.username);
+      response.writeHead(200, {
+        "Content-Type": "image/png",
+        "Content-Disposition": "attachment; filename=guardian-evaluation-passed.png",
+        "Cache-Control": "private, no-store",
+        "X-Content-Type-Options": "nosniff",
+      });
+      response.end(image);
+      return;
     }
     if (request.method === "POST" && pathname === "/api/lock") {
       const { user } = await authenticatedUser(request);
@@ -359,6 +381,7 @@ export function startMiniAppServer(config: Config, db: Database) {
         client.listOpenPositions(ticket.accountId),
         client.listMarkets(),
       ]);
+      if (!isActiveAccount(freshAccount)) throw new Error("This challenge is no longer active for trading.");
       const freshMarket = freshMarkets.find(item => item.id === ticket.marketId && item.available !== false);
       if (!freshMarket) throw new Error("MyFundedPerps rule check: this market is no longer available.");
       const freshCheck = platformRuleCheck({ account: freshAccount, policy: freshPolicy, market: freshMarket, ticket, openPositions: freshPositions });
@@ -482,6 +505,7 @@ export function startMiniAppServer(config: Config, db: Database) {
     "/app/app-v22.js": { file: "app.js", type: "text/javascript; charset=utf-8" },
     "/app/app-v23.js": { file: "app.js", type: "text/javascript; charset=utf-8" },
     "/app/app-v24.js": { file: "app.js", type: "text/javascript; charset=utf-8" },
+    "/app/app-v25.js": { file: "app.js", type: "text/javascript; charset=utf-8" },
     "/app/styles.css": { file: "styles.css", type: "text/css; charset=utf-8" },
     "/app/styles-v3.css": { file: "styles.css", type: "text/css; charset=utf-8" },
     "/app/styles-v4.css": { file: "styles.css", type: "text/css; charset=utf-8" },
@@ -503,6 +527,7 @@ export function startMiniAppServer(config: Config, db: Database) {
     "/app/styles-v21.css": { file: "styles.css", type: "text/css; charset=utf-8" },
     "/app/styles-v22.css": { file: "styles.css", type: "text/css; charset=utf-8" },
     "/app/styles-v23.css": { file: "styles.css", type: "text/css; charset=utf-8" },
+    "/app/styles-v24.css": { file: "styles.css", type: "text/css; charset=utf-8" },
   };
 
   const server = createServer(async (request, response) => {
