@@ -5,7 +5,7 @@ import type { Config } from "./config.js";
 import type { Database } from "./db.js";
 
 const STREAM_URL = "wss://api-stream.myfundedperpetuals.com/v1/market-data";
-const DISCLAIMER = "Market information only — not financial advice.";
+const DISCLAIMER = "Market information only. This is not financial advice.";
 
 type Tick = { price: number; time: number };
 type Candle = { closeTime: number; volume: number };
@@ -110,6 +110,22 @@ export function startPulseChannel(config: Config, db: Database, telegram: Api, b
   let stopped = false;
   let reconnectDelay = 1_000;
   let socket: WebSocket | undefined;
+  let connected = false;
+  let connectedAt = 0;
+  let lastMarketEvent = 0;
+  let subscriptionErrors: string[] = [];
+  let channelCheck = "Checking channel permissions";
+  let publishedAt = 0;
+
+  const status = () => [
+    `Channel: ${channelCheck}`,
+    `Market feed: ${connected ? "connected" : "disconnected"}`,
+    `Last market event: ${lastMarketEvent ? new Date(lastMarketEvent).toISOString() : "none"}`,
+    `Last channel post: ${publishedAt ? new Date(publishedAt).toISOString() : "none since this restart"}`,
+    `Subscriptions: ${subscriptionErrors.length ? subscriptionErrors.join("; ") : "no reported errors"}`,
+    `News: ${config.CRYPTOPANIC_TOKEN ? "configured" : "off (no provider token)"}`,
+    `Move alert: ${config.PULSE_MOVE_PERCENT}% over ${config.PULSE_MOVE_WINDOW_MINUTES} minutes`,
+  ].join("\n");
 
   const cooldownBucket = () => Math.floor(Date.now() / (config.PULSE_ALERT_COOLDOWN_MINUTES * 60_000));
 
@@ -117,6 +133,7 @@ export function startPulseChannel(config: Config, db: Database, telegram: Api, b
     if (!await db.claimPulsePublication(key)) return;
     try {
       await telegram.sendMessage(channelId, text, { reply_markup: openButton(botUsername, symbol, sourceUrl, sourceName), link_preview_options: { is_disabled: true } });
+      publishedAt = Date.now();
     } catch (error) {
       await db.releasePulsePublication(key);
       console.error("Pulse publication failed:", error);
@@ -184,7 +201,7 @@ export function startPulseChannel(config: Config, db: Database, telegram: Api, b
     if (!symbol) return;
     snapshots.set(symbol, {
       ...snapshots.get(symbol),
-      price: number(event.price ?? event.markPrice ?? event.mark_price) ?? snapshots.get(symbol)?.price,
+      price: number(event.markPx ?? event.price ?? event.markPrice ?? event.mark_price) ?? snapshots.get(symbol)?.price,
       change24hPct: number(event.change24hPct ?? event.change_24h_pct) ?? snapshots.get(symbol)?.change24hPct,
       volume24h: number(event.dayNtlVlm ?? event.volume24h ?? event.volume_24h) ?? snapshots.get(symbol)?.volume24h,
       fundingRate: number(event.fundingRate ?? event.funding_rate) ?? snapshots.get(symbol)?.fundingRate,
@@ -194,10 +211,20 @@ export function startPulseChannel(config: Config, db: Database, telegram: Api, b
   function onMessage(raw: WebSocket.RawData) {
     try {
       const frame = JSON.parse(raw.toString()) as Record<string, unknown>;
+      if (frame.op === "sub_err" || frame.op === "err") {
+        const error = frame.error && typeof frame.error === "object" ? JSON.stringify(frame.error) : String(frame.error ?? "unknown error");
+        subscriptionErrors = [...subscriptionErrors.slice(-3), `id ${String(frame.id ?? "?")}: ${error}`];
+        console.error("Pulse market subscription failed:", error);
+      }
+      if (frame.op === "draining") {
+        console.warn("Pulse market stream is draining; reconnecting.");
+        socket?.close();
+      }
       for (const wrapper of extractEvents(frame)) {
         const nested = (wrapper.tick ?? wrapper.book ?? wrapper.candle ?? wrapper.marketStats ?? wrapper.stats) as unknown;
         const event = nested && typeof nested === "object" ? nested as Record<string, unknown> : wrapper;
         const type = wrapper.tick ? "tick" : wrapper.book ? "book" : wrapper.candle ? "candle" : wrapper.marketStats || wrapper.stats ? "marketstats" : eventType(frame, event);
+        if (event.symbol && event.provider) lastMarketEvent = Date.now();
         if (type.includes("tick") || (event.price !== undefined && event.kind !== undefined)) void handleTick(event);
         else if (type.includes("book") || event.bids !== undefined) void handleBook(event);
         else if (type.includes("candle") || event.open !== undefined) void handleCandle(event);
@@ -213,6 +240,9 @@ export function startPulseChannel(config: Config, db: Database, telegram: Api, b
     socket = new WebSocket(STREAM_URL);
     socket.on("open", () => {
       reconnectDelay = 1_000;
+      connected = true;
+      connectedAt = Date.now();
+      subscriptionErrors = [];
       const common = { symbols: config.PULSE_SYMBOLS, providers: [config.PULSE_PROVIDER] };
       socket?.send(JSON.stringify({ op: "sub", id: 1, channel: "ticks", payload: common }));
       socket?.send(JSON.stringify({ op: "sub", id: 2, channel: "books", payload: common }));
@@ -223,6 +253,7 @@ export function startPulseChannel(config: Config, db: Database, telegram: Api, b
     socket.on("message", onMessage);
     socket.on("error", (error) => console.warn("Pulse market stream error:", error.message));
     socket.on("close", () => {
+      connected = false;
       if (stopped) return;
       const delay = reconnectDelay;
       reconnectDelay = Math.min(reconnectDelay * 2, 30_000);
@@ -313,20 +344,40 @@ export function startPulseChannel(config: Config, db: Database, telegram: Api, b
     );
   }
 
-  void telegram.getChat(channelId).then((chat) => console.log(`Pulse channel ready: ${"title" in chat ? chat.title : channelId}`)).catch((error) => console.warn("Pulse channel check failed. Make the bot a channel admin with Post Messages permission.", error));
+  void (async () => {
+    try {
+      const [chat, me] = await Promise.all([telegram.getChat(channelId), telegram.getMe()]);
+      const membership = await telegram.getChatMember(channelId, me.id);
+      if (membership.status !== "administrator" && membership.status !== "creator") throw new Error("The bot is not a channel administrator.");
+      if (membership.status === "administrator" && membership.can_post_messages !== true) throw new Error("The bot lacks Post Messages permission.");
+      channelCheck = `ready (${"title" in chat ? chat.title : channelId})`;
+      console.log(`Pulse channel ${channelCheck}`);
+    } catch (error) {
+      channelCheck = `unavailable: ${error instanceof Error ? error.message : String(error)}`;
+      console.error("Pulse channel check failed:", error);
+    }
+  })();
   connect();
   const briefTimer = setInterval(() => void publishBrief(), 60_000);
   briefTimer.unref();
+  const healthTimer = setInterval(() => {
+    if (connected && Date.now() - Math.max(lastMarketEvent, connectedAt) > 120_000) {
+      console.warn("Pulse market feed has no events for two minutes; reconnecting.");
+      socket?.terminate();
+    }
+  }, 30_000);
+  healthTimer.unref();
   setTimeout(() => void publishBrief(), 15_000).unref();
   const newsTimer = config.CRYPTOPANIC_TOKEN ? setInterval(() => void pollNews(), config.PULSE_NEWS_POLL_MINUTES * 60_000) : undefined;
   newsTimer?.unref();
   if (config.CRYPTOPANIC_TOKEN) setTimeout(() => void pollNews(), 30_000).unref();
   else console.log("Pulse news catalysts are disabled (CRYPTOPANIC_TOKEN is not set).");
 
-  return () => {
+  return { status, stop: () => {
     stopped = true;
     clearInterval(briefTimer);
+    clearInterval(healthTimer);
     if (newsTimer) clearInterval(newsTimer);
     socket?.close();
-  };
+  } };
 }

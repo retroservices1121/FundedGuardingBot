@@ -94,6 +94,8 @@ Pulse gives the public Telegram channel a useful job without turning it into a s
 4. Optionally adjust `PULSE_SYMBOLS`, move/volume/spread thresholds, cooldown, and the New York-time daily brief hour shown in `.env.example`.
 5. Redeploy and check Railway logs for `Pulse channel ready` and `Funded Guardian Pulse connected`.
 
+If posts stop, send `/pulse_status` to the bot in a private chat from the Telegram account configured as `ADMIN_TELEGRAM_ID`. It reports channel posting permissions, the latest market event and post, subscription errors, and whether news is configured. A connected socket with no events for two minutes reconnects automatically. Pulse does not post on every price change: the move, volume, and spread thresholds must first be met. The daily brief posts at `PULSE_BRIEF_HOUR_ET` in New York time only after a market price is available.
+
 Safe defaults watch BTC, ETH, and SOL; alert on a 1% move over roughly 15 minutes, 3× recent 1-minute volume, or a 10-basis-point best-bid/ask spread. Each alert type is limited to once per market per 60-minute cooldown bucket and publications are deduplicated in PostgreSQL across restarts. Alert buttons hand the reader back to the private bot and open that market in the Mini App.
 
 ### Optional news-catalyst alerts

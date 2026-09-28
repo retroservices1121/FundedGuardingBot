@@ -33,5 +33,9 @@ if (appUrl) {
 }
 startGuardianMonitor(config, db, bot.api);
 const info = await bot.api.getMe();
-startPulseChannel(config, db, bot.api, info.username);
+const pulse = startPulseChannel(config, db, bot.api, info.username);
+bot.command("pulse_status", async (ctx) => {
+  if (!config.ADMIN_TELEGRAM_ID || ctx.from?.id !== config.ADMIN_TELEGRAM_ID || ctx.chat.type !== "private") return;
+  await ctx.reply(pulse?.status() ?? "Pulse is disabled. Set PULSE_CHANNEL_ID in Railway and redeploy.");
+});
 await bot.start({ onStart: () => console.log(`@${info.username} is running.`) });
