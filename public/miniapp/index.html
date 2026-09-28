@@ -110,9 +110,10 @@
         <article class="balance-card">
           <span class="eyebrow">CURRENT EQUITY</span>
           <div class="balance-row"><strong id="equity">—</strong><span id="accountStatus">—</span></div>
-          <div class="progress-label"><span>Profit target progress</span><span id="progressText">—</span></div>
+          <div id="fundedAccountNote" hidden>Funded account · Live loss floors and room from MyFundedPerps. Check payout terms in your MyFundedPerps account.</div>
+          <div id="profitTargetSection"><div class="progress-label"><span>Profit target progress</span><span id="progressText">—</span></div>
           <div class="progress"><i id="progressBar"></i></div>
-          <div class="rule-values profit-values"><div><span>Account target</span><strong id="profitTargetLimit">—</strong></div><div><span>Still required</span><strong id="profitRemaining">—</strong></div></div>
+          <div class="rule-values profit-values"><div><span>Account target</span><strong id="profitTargetLimit">—</strong></div><div><span>Still required</span><strong id="profitRemaining">—</strong></div></div></div>
         </article>
         <div class="rule-stack">
           <article class="rule-card" id="dailyRuleCard">
@@ -242,7 +243,7 @@
           <div class="learn-impact">
             <div><span>Daily-loss room after example loss</span><strong id="learnDailyRoom">—</strong><i id="learnDailyBar"></i></div>
             <div><span>Drawdown room after example loss</span><strong id="learnDrawdownRoom">—</strong><i id="learnDrawdownBar"></i></div>
-            <div><span>Profit target remaining after example win</span><strong id="learnTargetRemaining">—</strong></div>
+            <div id="learnTargetImpact"><span>Profit target remaining after example win</span><strong id="learnTargetRemaining">—</strong></div>
           </div>
           <p class="learn-explainer" id="learnExplanation"></p>
         </article>

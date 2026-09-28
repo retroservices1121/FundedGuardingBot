@@ -72,6 +72,9 @@ export function resolveAccountRequirements(account: ChallengeAccount, policy?: T
     else if (id.includes("profit") && id.includes("target")) requirements.profit_target_pct = percent;
     else if (id.includes("consistency")) requirements.consistency_pct = percent;
   }
+  // An issued funded account is separate from its completed evaluation. A stale
+  // evaluation target in the risk snapshot must not become a funded target.
+  if (String(account.stage ?? "").toLowerCase() === "funded") delete requirements.profit_target_pct;
   return requirements;
 }
 
@@ -79,13 +82,14 @@ export function accountRuleProgress(account: ChallengeAccount, policy?: TradingP
   const risk = accountRisk(account);
   const startingBalance = finite(account.starting_balance);
   const requirement = resolveAccountRequirements(account, policy);
+  const funded = String(account.stage ?? "").toLowerCase() === "funded";
   const amountFromPercent = (percent: unknown) => {
     const pct = finite(percent);
     return startingBalance !== undefined && pct !== undefined ? startingBalance * pct / 100 : undefined;
   };
-  const lossRule = (limitPct: unknown, floor: unknown, room: unknown) => {
+  const lossRule = (limitPct: unknown, floor: unknown, room: unknown, lockedFloor = false) => {
     const pct = finite(limitPct);
-    const limitAmount = amountFromPercent(pct);
+    const limitAmount = lockedFloor ? undefined : amountFromPercent(pct);
     const currentRoom = finite(room);
     const usedAmount = limitAmount !== undefined && currentRoom !== undefined
       ? clamp(limitAmount - currentRoom, 0, limitAmount)
@@ -97,11 +101,12 @@ export function accountRuleProgress(account: ChallengeAccount, policy?: TradingP
       room: currentRoom,
       usedAmount,
       usedPercent: limitAmount && usedAmount !== undefined ? usedAmount / limitAmount * 100 : undefined,
+      lockedFloor,
     };
   };
   const profitTargetPct = finite(requirement.profit_target_pct);
   const profitTargetAmount = amountFromPercent(profitTargetPct);
-  const remainingProfit = finite(risk.remaining_profit);
+  const remainingProfit = funded ? undefined : finite(risk.remaining_profit);
   const achievedAmount = profitTargetAmount !== undefined && remainingProfit !== undefined
     ? clamp(profitTargetAmount - remainingProfit, 0, profitTargetAmount)
     : undefined;
@@ -114,7 +119,9 @@ export function accountRuleProgress(account: ChallengeAccount, policy?: TradingP
       achievedPercent: profitTargetAmount && achievedAmount !== undefined ? achievedAmount / profitTargetAmount * 100 : undefined,
     },
     dailyLoss: lossRule(requirement.daily_loss_pct, risk.daily_loss_floor, risk.daily_loss_room),
-    maxDrawdown: lossRule(requirement.max_drawdown_pct, risk.max_drawdown_floor, risk.max_drawdown_room),
+    maxDrawdown: lossRule(requirement.max_drawdown_pct, risk.max_drawdown_floor, risk.max_drawdown_room,
+      funded && startingBalance !== undefined && finite(risk.max_drawdown_floor) !== undefined
+        && finite(risk.max_drawdown_floor)! >= startingBalance),
   };
 }
 

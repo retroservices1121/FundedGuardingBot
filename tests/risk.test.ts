@@ -75,6 +75,26 @@ describe("guardian", () => {
     expect(requirements.max_drawdown_pct).toBe(6);
   });
 
+  it("uses funded account floors after withdrawal without reusing evaluation profit targets", () => {
+    const funded = {
+      id: "funded-100k", stage: "Funded", status: "active", starting_balance: 100_000,
+      risk: {
+        equity: 101_250, daily_loss_floor: 99_500, daily_loss_room: 1_750,
+        max_drawdown_floor: 100_000, max_drawdown_room: 1_250,
+        remaining_profit: 4_000,
+        requirements: { profit_target_pct: 10, daily_loss_pct: 3, max_drawdown_pct: 6 },
+      },
+    };
+    const policy = { account_rules: [{ rule_id: "profit-target", percentage: 12 }] };
+    const progress = accountRuleProgress(funded, policy);
+    expect(resolveAccountRequirements(funded, policy).profit_target_pct).toBeUndefined();
+    expect(progress.profit.targetAmount).toBeUndefined();
+    expect(progress.profit.remaining).toBeUndefined();
+    expect(progress.dailyLoss).toMatchObject({ floor: 99_500, room: 1_750, limitAmount: 3_000 });
+    expect(progress.maxDrawdown).toMatchObject({ floor: 100_000, room: 1_250, lockedFloor: true });
+    expect(progress.maxDrawdown.limitAmount).toBeUndefined();
+  });
+
   it("blocks excessive risk and policy restrictions", () => {
     const problems = guardAccount(
       { id: "a", status: "active", risk: { daily_loss_room: 300, max_loss_room: 1_000 } },
