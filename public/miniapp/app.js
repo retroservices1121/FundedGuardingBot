@@ -260,9 +260,10 @@ async function loadAdmin(){
  if(!state.session?.isAdmin)return;
  $("#adminExecutions").innerHTML='<article class="empty">Loading analytics…</article>';
  try{
-  const d=preview?{users:128,connected:91,activeDay:37,activeWeek:84,newWeek:19,liveTrades:246,liveNotional:1284320,weekNotional:284900,dryRuns:63,recent:[{symbol:"BTC",side:"buy",notionalUsd:4948,dryRun:false,status:"filled",executedAt:Date.now(),username:"trader"}]}:await api("/api/admin/stats");
-  $("#adminUsers").textContent=d.users;$("#adminActiveDay").textContent=d.activeDay;$("#adminActiveWeek").textContent=d.activeWeek;$("#adminNewWeek").textContent=d.newWeek;$("#adminLiveTrades").textContent=d.liveTrades;$("#adminNotional").textContent=money(d.liveNotional);$("#adminNotionalWeek").textContent=money(d.weekNotional);$("#adminDryRuns").textContent=d.dryRuns;
-  $("#adminExecutions").innerHTML=d.recent.length?d.recent.map(x=>`<article class="admin-execution"><div class="position-head"><strong>${esc(x.symbol)}</strong><span class="pill ${x.side==="sell"?"short":""}">${esc(x.side).toUpperCase()} · ${x.dryRun?"DRY RUN":"LIVE"}</span></div><div class="position-bottom"><span>${money(x.notionalUsd)} notional</span><small>@${esc(x.username||"private")} · ${new Date(x.executedAt).toLocaleString()}</small></div></article>`).join(""):'<article class="empty">No executions recorded yet.</article>';
+  const d=preview?{users:128,connected:91,activeDay:37,activeWeek:84,newWeek:19,liveTrades:246,liveNotional:1284320,weekNotional:284900,recent:[{symbol:"BTC",side:"buy",notionalUsd:4948,dryRun:false,status:"filled",executedAt:Date.now(),username:"trader"}]}:await api("/api/admin/stats");
+  $("#adminUsers").textContent=d.users;$("#adminActiveDay").textContent=d.activeDay;$("#adminActiveWeek").textContent=d.activeWeek;$("#adminNewWeek").textContent=d.newWeek;$("#adminLiveTrades").textContent=d.liveTrades;$("#adminNotional").textContent=money(d.liveNotional);$("#adminNotionalWeek").textContent=money(d.weekNotional);
+  const liveRecent=d.recent.filter(x=>!x.dryRun);
+  $("#adminExecutions").innerHTML=liveRecent.length?liveRecent.map(x=>`<article class="admin-execution"><div class="position-head"><strong>${esc(x.symbol)}</strong><span class="pill ${x.side==="sell"?"short":""}">${esc(x.side).toUpperCase()} · LIVE</span></div><div class="position-bottom"><span>${money(x.notionalUsd)} notional</span><small>@${esc(x.username||"private")} · ${new Date(x.executedAt).toLocaleString()}</small></div></article>`).join(""):'<article class="empty">No live executions recorded yet.</article>';
  }catch(error){$("#adminExecutions").innerHTML=`<article class="empty">${esc(error.message)}</article>`}
 }
 $("#refreshAdmin").addEventListener("click",loadAdmin);
