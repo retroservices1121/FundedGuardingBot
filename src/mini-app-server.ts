@@ -1,3 +1,4 @@
+import { parseGuards } from "./mobile-guards.js";
 import { MobileActivity } from "./mobile-activity.js";
 import { MobileTrading } from "./mobile-trading.js";
 import { MobileAuth } from "./mobile-auth.js";
@@ -577,6 +578,12 @@ export function startMiniAppServer(config: Config, db: Database) {
             const preferred = accounts[0]!;
             await mobileAuth.saveConnection(token,{environment,encryptedApiKey:secrets.encrypt(apiKey),keyLastFour:apiKey.slice(-4),accountId:preferred.id});
             return json(response,200,{connected:true,accounts,selectedAccountId:preferred.id,keyLastFour:apiKey.slice(-4)});
+          }
+          if (url.pathname === "/api/mobile/auth/guards") {
+            const connection=await mobileAuth.connection(token);
+            if(!connection)return json(response,400,{error:"Connect MyFundedPerps first."});
+            if(request.method==='GET')return json(response,200,connection.personal_guards??{mode:'off'});
+            if(request.method==='POST'){const guards=parseGuards(await body(request));await mobileAuth.saveGuards(token,guards);return json(response,200,guards);}
           }
           if (url.pathname === "/api/mobile/auth/pulse" && request.method === "GET") {
             await mobileAuth.user(token);

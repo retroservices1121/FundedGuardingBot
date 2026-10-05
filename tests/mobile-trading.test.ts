@@ -35,6 +35,12 @@ describe('native trading',()=>{
   const send=vi.spyOn(MfpClient.prototype,'placeProtectedMarketOrder');
   await expect(trading.confirm('session','ticket')).rejects.toThrow('Selected account changed');expect(send).not.toHaveBeenCalled();
  });
+ it('rechecks personal limits at confirmation when settings changed',async()=>{
+  const {auth,trading}=mocks();const {ticket}=await trading.quote('session',input);auth.claimTicket.mockResolvedValue(ticket);
+  auth.connection.mockResolvedValue({...await auth.connection(),personal_guards:{mode:'enforce',maxRiskUsd:50}});
+  const send=vi.spyOn(MfpClient.prototype,'placeProtectedMarketOrder');
+  await expect(trading.confirm('session',ticket.id)).rejects.toThrow('personal trade limit');expect(send).not.toHaveBeenCalled();
+ });
  it('uses a stable idempotency key and reports pending rather than filled',async()=>{
   const {auth,trading}=mocks();const {ticket}=await trading.quote('session',input);auth.claimTicket.mockResolvedValue(ticket);
   const send=vi.spyOn(MfpClient.prototype,'placeProtectedMarketOrder').mockResolvedValue({id:'order',status:'pending'});

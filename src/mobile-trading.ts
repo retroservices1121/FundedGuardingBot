@@ -1,3 +1,4 @@
+import { guardWarnings } from "./mobile-guards.js";
 import type { Side } from './types.js';
 import { randomUUID } from 'node:crypto';
 import type { Config } from './config.js';
@@ -46,6 +47,7 @@ export class MobileTrading {
     ticket.estimatedNotional = quote.estimated_notional ?? size * ticket.expectedPrice;
     ticket.platformRules=platformRuleCheck({account,policy,market,ticket,openPositions:positions});
     if(ticket.size<=0||!Number.isFinite(ticket.size)||!Number.isFinite(ticket.expectedPrice)||ticket.stopLossPrice<=0||ticket.takeProfitPrice<=0)throw new Error('These inputs produce invalid prices or size.');
+    ticket.platformRules.warnings.push(...guardWarnings(connection.personal_guards,account,ticket.riskUsd));
     await this.auth.saveTicket(token,ticket);
     return {ticket,dryRun:this.config.DRY_RUN,accountName:account.name??account.id};
   }
@@ -60,6 +62,7 @@ export class MobileTrading {
       if(!isActiveAccount(account))throw new Error('The account is no longer active.');
       const market=markets.find(m=>m.id===ticket.marketId&&m.available!==false);
       if(!market)throw new Error('The market is no longer available.');
+      guardWarnings(connection.personal_guards,account,ticket.riskUsd);
       const check=platformRuleCheck({account,policy,market,ticket,openPositions:positions});
       if(check.problems.length)throw new Error(check.problems.join(' '));
       if(this.config.DRY_RUN){const result={dryRun:true,status:'validated'};await this.auth.saveTicketResult(id,result);return result;}

@@ -1,10 +1,21 @@
-import { Alert, Pressable, Text, View, StyleSheet } from 'react-native';
+import { useEffect, useState } from 'react';
+import { Alert, Pressable, ScrollView, Text, TextInput, View, StyleSheet } from 'react-native';
 import { useSession } from '../../App';
-export default function Settings(){const {user,busy,leave,error}=useSession();return <View style={styles.page}>
-  <Text style={styles.copy}>Signed in with {user.provider==='apple'?'Apple':'Google'}.</Text>
-  <Text style={styles.copy}>Personal trading guardrails are currently off. Custom native controls will be added with trading.</Text>
-  <Pressable accessibilityRole="button" disabled={busy} onPress={()=>void leave()}><Text style={styles.link}>Sign out</Text></Pressable>
-  <Pressable accessibilityRole="button" disabled={busy} onPress={()=>Alert.alert('Delete Guardian account?','This removes your native login, saved API key and sessions. It does not close your MyFundedPerps positions.',[{text:'Cancel',style:'cancel'},{text:'Delete',style:'destructive',onPress:()=>void leave(true)}])}><Text style={styles.error}>Delete Guardian account</Text></Pressable>
-  {!!error&&<Text style={styles.error}>{error}</Text>}
-</View>}
-const styles=StyleSheet.create({page:{flex:1,padding:24,gap:24},copy:{color:'#a9bbb2',fontSize:16,lineHeight:24},link:{color:'#2dcc98',paddingVertical:12,fontSize:17},error:{color:'#ff9c9c',paddingVertical:12,fontSize:16}});
+export default function Settings(){
+ const {user,token,request,busy,leave,error}=useSession();const [mode,setMode]=useState('off'),[max,setMax]=useState(''),[percent,setPercent]=useState(''),[notice,setNotice]=useState(''),[loading,setLoading]=useState(true),[saving,setSaving]=useState(false),[ready,setReady]=useState(false);
+ useEffect(()=>{let mounted=true;request('guards','GET',undefined,token).then(value=>{if(mounted){setMode(value.mode);setMax(value.maxRiskUsd==null?'':String(value.maxRiskUsd));setPercent(value.lossRoomPercent==null?'':String(value.lossRoomPercent));setReady(true);}}).catch(e=>{if(mounted)setNotice(e.message);}).finally(()=>{if(mounted)setLoading(false);});return()=>{mounted=false;};},[request,token]);
+ async function save(){if(saving)return;if([max,percent].some(v=>v.trim()&&(!Number.isFinite(Number(v))||Number(v)<=0))){setNotice('Enter positive numeric limits or leave them blank.');return;}setSaving(true);try{await request('guards','POST',{mode,maxRiskUsd:max.trim()?Number(max):null,lossRoomPercent:percent.trim()?Number(percent):null},token);setNotice('Your personal guardrails are saved.');}catch(e){setNotice(e instanceof Error?e.message:'Could not save.');}finally{setSaving(false);}}
+ return <ScrollView style={styles.page} contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+ <Text style={styles.heading}>Personal guardrails</Text><Text style={styles.copy}>Off by default. Choose your own limits. MyFundedPerps account rules still apply to every order.</Text>
+ <View style={styles.row}>{(['off','warn','enforce'] as const).map(value=><Pressable key={value} accessibilityRole="button" accessibilityState={{selected:mode===value}} disabled={!ready||saving} style={[styles.option,mode===value&&styles.selected]} onPress={()=>setMode(value)}><Text style={styles.value}>{value==='off'?'Off':value==='warn'?'Warn me':'Enforce'}</Text></Pressable>)}</View>
+ <Text style={styles.copy}>{mode==='off'?'Guardian adds no personal risk limit.':mode==='warn'?'Show warnings and allow you to decide.':'Block new trades that exceed your chosen limits. Position closing stays available.'}</Text>
+ <Text style={styles.copy}>Maximum risk per trade ($), optional</Text><TextInput editable={ready&&!saving} accessibilityLabel="Maximum risk per trade" keyboardType="decimal-pad" value={max} onChangeText={setMax} placeholder="No personal limit" placeholderTextColor="#82968b" style={styles.input}/>
+ <Text style={styles.copy}>Remaining loss room per trade (%), optional</Text><TextInput editable={ready&&!saving} accessibilityLabel="Loss room percentage" keyboardType="decimal-pad" value={percent} onChangeText={setPercent} placeholder="Choose 1 to 100" placeholderTextColor="#82968b" style={styles.input}/>
+ <Text style={styles.small}>Uses the smaller available daily or maximum loss room. Limits cover the proposed trade risk at stop, excluding fees, slippage and other open risk. Settings apply across your linked accounts.</Text>
+ <Pressable accessibilityRole="button" disabled={!ready||saving||loading} onPress={()=>void save()} style={styles.option}><Text style={styles.link}>{loading?'Loading…':saving?'Saving…':'Save guardrails'}</Text></Pressable>{!!notice&&<Text accessibilityRole="alert" style={styles.copy}>{notice}</Text>}
+ <Text style={styles.copy}>Signed in with {user.provider==='apple'?'Apple':'Google'}.</Text>
+ <Pressable accessibilityRole="button" disabled={busy} onPress={()=>void leave()}><Text style={styles.link}>Sign out</Text></Pressable>
+ <Pressable accessibilityRole="button" disabled={busy} onPress={()=>Alert.alert('Delete Guardian account?','This removes your native login, saved API key and sessions. It does not close your MyFundedPerps positions.',[{text:'Cancel',style:'cancel'},{text:'Delete',style:'destructive',onPress:()=>void leave(true)}])}><Text style={styles.error}>Delete Guardian account</Text></Pressable>{!!error&&<Text style={styles.error}>{error}</Text>}
+ </ScrollView>;
+}
+const styles=StyleSheet.create({page:{flex:1,backgroundColor:'#07120e'},content:{padding:24,gap:18,paddingBottom:50},heading:{color:'#fff',fontSize:25,fontWeight:'700'},copy:{color:'#a9bbb2',fontSize:16,lineHeight:24},small:{color:'#82968b',fontSize:13,lineHeight:20},link:{color:'#2dcc98',paddingVertical:12,fontSize:17},error:{color:'#ff9c9c',paddingVertical:12,fontSize:16},row:{flexDirection:'row',gap:8},option:{backgroundColor:'#14271e',borderRadius:12,padding:12},selected:{backgroundColor:'#24533e'},value:{color:'#fff'},input:{color:'#fff',backgroundColor:'#14271e',borderRadius:12,padding:16,fontSize:20}});

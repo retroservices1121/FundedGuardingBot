@@ -1,3 +1,4 @@
+import { Link, router } from 'expo-router';
 import AccountDashboard from './account-dashboard';
 import { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, Linking, Pressable, ScrollView, StyleSheet, Text, TextInput } from 'react-native';
@@ -24,6 +25,7 @@ export default function AccountOnboarding({ token, request }: Props) {
       if (action === 'connect') {
         const result = await request('connect','POST',{apiKey:apiKey.trim()},token);
         setConnection(result); setApiKey('');
+        Alert.alert('Account connected','Personal guardrails are off. You can choose warnings or your own enforced limits now, or continue without them.',[{text:'Continue'},{text:'Set my limits',onPress:()=>router.push('/settings')}]);
       } else if (action === 'select') {
         await request('account-selection','POST',{accountId:id},token);
         setConnection(previous => previous ? {...previous, selectedAccountId:id} : previous);
@@ -44,7 +46,8 @@ export default function AccountOnboarding({ token, request }: Props) {
         <Text style={styles.copy}>{account.stage ?? account.status ?? 'Active'}{Number.isFinite(account.starting_balance) ? ` · $${account.starting_balance!.toLocaleString()}` : ''}</Text>
         {connection.selectedAccountId===account.id && <Text style={styles.link}>Selected</Text>}
       </Pressable>)}
-      <Text style={styles.copy}>Personal guardrails are optional and off by default. MyFundedPerps account rules still apply. Custom guardrail controls will be added in Settings.</Text>
+      <Text style={styles.copy}>Personal guardrails are optional and off by default. MyFundedPerps account rules still apply. Choose warnings or your own enforced limits in Settings.</Text>
+      <Link href="/settings" style={styles.link}>Choose my guardrails</Link>
       <Pressable disabled={busy} accessibilityRole="button" onPress={() => void act('refresh')}><Text style={styles.link}>Refresh accounts</Text></Pressable>
       <Pressable disabled={busy} accessibilityRole="button" onPress={() => Alert.alert('Disconnect MyFundedPerps?', 'This removes the saved API key from Guardian. Your positions remain on MyFundedPerps.',[{text:'Cancel',style:'cancel'},{text:'Disconnect',style:'destructive',onPress:()=>void act('disconnect')}])}><Text style={styles.remove}>Disconnect API key</Text></Pressable>
     </> : <>

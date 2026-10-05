@@ -29,6 +29,7 @@ export class MobileAuth {
         encrypted_api_key TEXT NOT NULL, key_last_four TEXT NOT NULL,
         selected_account_id TEXT NOT NULL, guardian_mode TEXT NOT NULL DEFAULT 'off'
       );
+      ALTER TABLE mobile_connections ADD COLUMN IF NOT EXISTS personal_guards JSONB NOT NULL DEFAULT '{"mode":"off"}'::jsonb;
       CREATE TABLE IF NOT EXISTS mobile_close_tickets (
         id TEXT PRIMARY KEY, identity_id UUID NOT NULL REFERENCES mobile_identities(id) ON DELETE CASCADE,
         payload JSONB NOT NULL, expires_at TIMESTAMPTZ NOT NULL, submitted_at TIMESTAMPTZ
@@ -101,6 +102,11 @@ export class MobileAuth {
     await this.db.pool.query(`INSERT INTO mobile_connections (identity_id,environment,encrypted_api_key,key_last_four,selected_account_id) VALUES ($1,$2,$3,$4,$5)
       ON CONFLICT(identity_id) DO UPDATE SET environment=$2,encrypted_api_key=$3,key_last_four=$4,selected_account_id=$5`,
       [user.id,input.environment,input.encryptedApiKey,input.keyLastFour,input.accountId]);
+  }
+  async saveGuards(token:string, guards:unknown) {
+    const user=await this.user(token);
+    const result=await this.db.pool.query(`UPDATE mobile_connections SET personal_guards=$2,guardian_mode=$3 WHERE identity_id=$1`,[user.id,JSON.stringify(guards),(guards as {mode:string}).mode]);
+    if(!result.rowCount)throw new Error('Connect MyFundedPerps first.');
   }
   async selectAccount(token: string, id: string) {
     const user = await this.user(token);
