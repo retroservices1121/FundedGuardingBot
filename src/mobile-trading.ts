@@ -51,6 +51,16 @@ export class MobileTrading {
     await this.auth.saveTicket(token,ticket);
     return {ticket,dryRun:this.config.DRY_RUN,accountName:account.name??account.id};
   }
+  async quick(token:string,input:Record<string,unknown>){
+    const connection=await this.auth.connection(token);
+    const prefs=connection?.personal_guards;
+    if(prefs?.quickTradeEnabled!==true)throw new Error('Enable one-tap trading in Settings first.');
+    const amounts=prefs.quickAmounts??[10,50,100];
+    if(!amounts.includes(Number(input.riskUsd)))throw new Error('Choose one of your saved quick risk amounts.');
+    const {ticket}=await this.quote(token,input);
+    const result=await this.confirm(token,ticket.id);
+    return {...result,warnings:ticket.platformRules?.warnings??[]};
+  }
   async confirm(token:string,id:string){
     const {connection,client}=await this.connection(token);
     const ticket=await this.auth.claimTicket(token,id);

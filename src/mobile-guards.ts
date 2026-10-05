@@ -1,10 +1,14 @@
 import { accountRisk } from './risk.js';
 import type { ChallengeAccount } from './types.js';
-export type PersonalGuards={mode:'off'|'warn'|'enforce';maxRiskUsd?:number;lossRoomPercent?:number};
+export type PersonalGuards={mode:'off'|'warn'|'enforce';maxRiskUsd?:number;lossRoomPercent?:number;quickTradeEnabled?:boolean;quickAmounts?:number[]};
 export function parseGuards(input:Record<string,unknown>):PersonalGuards {
  if(!['off','warn','enforce'].includes(String(input.mode)))throw new Error('Choose off, warn or enforce.');
  const optional=(key:string,max=Number.MAX_SAFE_INTEGER)=>{const raw=input[key];if(raw===null||raw===undefined||raw==='')return undefined;const value=Number(raw);if(!Number.isFinite(value)||value<=0||value>max)throw new Error(`Invalid ${key}.`);return value;};
- const result={mode:input.mode as PersonalGuards['mode'],maxRiskUsd:optional('maxRiskUsd'),lossRoomPercent:optional('lossRoomPercent',100)};
+ if(input.quickTradeEnabled!==undefined&&typeof input.quickTradeEnabled!=='boolean')throw new Error('Invalid quick trading preference.');
+ if(input.quickAmounts!==undefined&&(!Array.isArray(input.quickAmounts)||input.quickAmounts.length!==3||input.quickAmounts.some(v=>typeof v!=='number'||!Number.isFinite(v)||v<=0||v>100000)))throw new Error('Choose three positive quick risk amounts up to $100,000.');
+ const result:PersonalGuards={mode:input.mode as PersonalGuards['mode'],maxRiskUsd:optional('maxRiskUsd'),lossRoomPercent:optional('lossRoomPercent',100)};
+ if(input.quickTradeEnabled!==undefined)result.quickTradeEnabled=input.quickTradeEnabled;
+ if(input.quickAmounts!==undefined)result.quickAmounts=input.quickAmounts as number[];
  if(result.mode!=='off'&&result.maxRiskUsd===undefined&&result.lossRoomPercent===undefined)throw new Error('Choose at least one personal limit.');return result;
 }
 export function guardWarnings(guards:PersonalGuards|undefined,account:ChallengeAccount,risk:number){

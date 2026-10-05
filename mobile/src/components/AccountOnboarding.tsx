@@ -5,8 +5,8 @@ import { ActivityIndicator, Alert, Linking, Pressable, ScrollView, StyleSheet, T
 
 type Account = { id: string; name?: string; status?: string; stage?: string; starting_balance?: number; balance?: number };
 type Connection = { connected: boolean; accounts?: Account[]; selectedAccountId?: string; keyLastFour?: string };
-type Props = { token: string; request: (path: string, method?: string, data?: unknown, token?: string) => Promise<any> };
-export default function AccountOnboarding({ token, request }: Props) {
+type Props = { manage?:boolean;showDashboard?:boolean; token: string; request: (path: string, method?: string, data?: unknown, token?: string) => Promise<any> };
+export default function AccountOnboarding({ token, request,manage=true,showDashboard=true }: Props) {
   const [connection, setConnection] = useState<Connection | null>(null);
   const [apiKey, setApiKey] = useState('');
   const [error, setError] = useState('');
@@ -38,7 +38,7 @@ export default function AccountOnboarding({ token, request }: Props) {
   return <ScrollView style={styles.scroll} keyboardShouldPersistTaps="handled" contentContainerStyle={styles.content}>
     <Text style={styles.heading}>{connection?.connected ? 'Choose your account' : 'Connect MyFundedPerps'}</Text>
     {connection?.connected ? <>
-      {connection.selectedAccountId && <AccountDashboard key={connection.selectedAccountId} token={token} accountId={connection.selectedAccountId} request={request} />}
+      {showDashboard&&connection.selectedAccountId && <AccountDashboard key={connection.selectedAccountId} token={token} accountId={connection.selectedAccountId} request={request} />}
       <Text style={styles.copy}>API key connected, ending in {connection.keyLastFour}. Select the active account you want to use.</Text>
       {!connection.accounts?.length && <Text style={styles.copy}>No active accounts are currently available. Refresh after your account becomes active.</Text>}
       {connection.accounts?.map(account => <Pressable key={account.id} accessibilityRole="button" accessibilityState={{selected:connection.selectedAccountId===account.id,disabled:busy}} disabled={busy} style={[styles.account,connection.selectedAccountId===account.id && styles.selected]} onPress={() => void act('select',account.id)}>
@@ -46,10 +46,12 @@ export default function AccountOnboarding({ token, request }: Props) {
         <Text style={styles.copy}>{account.stage ?? account.status ?? 'Active'}{Number.isFinite(account.starting_balance) ? ` · $${account.starting_balance!.toLocaleString()}` : ''}</Text>
         {connection.selectedAccountId===account.id && <Text style={styles.link}>Selected</Text>}
       </Pressable>)}
+      {manage&&<>
       <Text style={styles.copy}>Personal guardrails are optional and off by default. MyFundedPerps account rules still apply. Choose warnings or your own enforced limits in Settings.</Text>
       <Link href="/settings" style={styles.link}>Choose my guardrails</Link>
       <Pressable disabled={busy} accessibilityRole="button" onPress={() => void act('refresh')}><Text style={styles.link}>Refresh accounts</Text></Pressable>
       <Pressable disabled={busy} accessibilityRole="button" onPress={() => Alert.alert('Disconnect MyFundedPerps?', 'This removes the saved API key from Guardian. Your positions remain on MyFundedPerps.',[{text:'Cancel',style:'cancel'},{text:'Disconnect',style:'destructive',onPress:()=>void act('disconnect')}])}><Text style={styles.remove}>Disconnect API key</Text></Pressable>
+      </>}
     </> : <>
       <Text style={styles.copy}>1. Open MyFundedPerps and sign in.</Text>
       <Text style={styles.copy}>2. Open Settings → API Keys. Create a key named “Funded Guardian”.</Text>

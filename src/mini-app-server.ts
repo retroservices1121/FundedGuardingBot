@@ -583,7 +583,7 @@ export function startMiniAppServer(config: Config, db: Database) {
             const connection=await mobileAuth.connection(token);
             if(!connection)return json(response,400,{error:"Connect MyFundedPerps first."});
             if(request.method==='GET')return json(response,200,connection.personal_guards??{mode:'off'});
-            if(request.method==='POST'){const guards=parseGuards(await body(request));await mobileAuth.saveGuards(token,guards);return json(response,200,guards);}
+            if(request.method==='POST'){const input=await body(request);const guards=parseGuards({...connection.personal_guards,...input});await mobileAuth.saveGuards(token,guards);return json(response,200,guards);}
           }
           if (url.pathname === "/api/mobile/auth/pulse" && request.method === "GET") {
             await mobileAuth.user(token);
@@ -618,6 +618,7 @@ export function startMiniAppServer(config: Config, db: Database) {
             try { return json(response,200,await mobileActivity.confirmClose(token,String(input.ticketId??""))); }
             catch(error) { return json(response,400,{error:errorMessage(error)}); }
           }
+          if(url.pathname==='/api/mobile/auth/trade/quick'&&request.method==='POST')return json(response,200,await mobileTrading.quick(token,await body(request)));
           if (url.pathname === "/api/mobile/auth/trade/quote" && request.method === "POST") {
             await mobileAuth.user(token);
             try { return json(response,200,await mobileTrading.quote(token,await body(request))); }

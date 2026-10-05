@@ -1,23 +1,35 @@
+import { useIsFocused } from 'expo-router/react-navigation';
+import { Link, useLocalSearchParams } from 'expo-router';
 import MarketChart from '../../components/market-chart';
 import { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useLocalSearchParams } from 'expo-router';
 import { useSession } from '../../../App';
 type Market={id:string;symbol:string;coin:string;provider:string;maxLeverage?:number};
 type Ticket={id:string;symbol:string;side:string;riskUsd:number;size:number;expectedPrice:number;stopLossPrice:number;takeProfitPrice:number;estimatedNotional:number;estimatedFee?:number;leverage:number;expiresAt:number;platformRules?:{warnings:string[];estimatedMargin?:number}};
 const money=(v?:number)=>typeof v==='number'&&Number.isFinite(v)?new Intl.NumberFormat('en-US',{style:'currency',currency:'USD',maximumFractionDigits:2}).format(v):'Unavailable';
 export default function Trade(){
+ const focused=useIsFocused();
  const {request,token}=useSession(),params=useLocalSearchParams<{marketId?:string}>();
  const [markets,setMarkets]=useState<Market[]|null>(null),[marketId,setMarketId]=useState(params.marketId??''),[search,setSearch]=useState(''),[side,setSide]=useState<'buy'|'sell'>('buy');
  const [risk,setRisk]=useState(''),[leverage,setLeverage]=useState(''),[stop,setStop]=useState(''),[reward,setReward]=useState('');
  const [ticket,setTicket]=useState<Ticket|null>(null),[accountName,setAccountName]=useState(''),[dryRun,setDryRun]=useState(false),[busy,setBusy]=useState(false),[error,setError]=useState(''),[result,setResult]=useState(''),[now,setNow]=useState(()=>Date.now());
+ const [quickPrefs,setQuickPrefs]=useState<{quickTradeEnabled?:boolean;quickAmounts?:number[]}|null>(null),[quickUncertain,setQuickUncertain]=useState(false);
  const pending=useRef(false),[submitted,setSubmitted]=useState(false);
  useEffect(()=>{let mounted=true;request('markets','GET',undefined,token).then(result=>{if(mounted)setMarkets(result.markets);}).catch(e=>{if(mounted)setError(e.message);});return()=>{mounted=false;};},[request,token]);
  useEffect(()=>{if(!ticket)return;const timer=setInterval(()=>setNow(Date.now()),1000);return()=>clearInterval(timer);},[ticket]);
  // Navigation can select another market while this tab remains mounted.
  // eslint-disable-next-line react-hooks/set-state-in-effect
  useEffect(()=>{if(params.marketId){setMarketId(params.marketId);setTicket(null);setSearch('');setError('');}},[params.marketId]);
+ useEffect(()=>{if(!focused)return;let mounted=true;request('guards','GET',undefined,token).then(value=>{if(mounted)setQuickPrefs(value);}).catch(()=>{if(mounted)setQuickPrefs(null);});return()=>{mounted=false;};},[request,token,focused]);
+ async function quickTrade(amount:number){
+  if(pending.current||quickUncertain||!quickPrefs?.quickTradeEnabled)return;
+  if(!marketId||![leverage,stop,reward].every(v=>v.trim()&&Number.isFinite(Number(v))&&Number(v)>0)){setError('Choose a market, leverage, stop distance and reward/risk first.');return;}
+  pending.current=true;setBusy(true);setError('');setResult('');
+  try{const value=await request('trade/quick','POST',{marketId,side,riskUsd:amount,leverage:Number(leverage),stopPercent:Number(stop),rewardRisk:Number(reward)},token);if(value.error)throw new Error(value.error);setResult(`${value.dryRun?'Dry run validated. No order sent.':`Order submitted: ${value.status}. Check MyFundedPerps for the final fill.`}${value.warnings?.length?'\n'+value.warnings.join('\n'):''}`);}
+  catch(e){const message=e instanceof Error?e.message:'Submission response unavailable.';setError(message);if(/timeout|timed out|network|fetch|abort|Check MyFundedPerps/i.test(message))setQuickUncertain(true);}
+  finally{pending.current=false;setBusy(false);}
+ }
  const market=markets?.find(m=>m.id===marketId);
  async function review(){
   if(pending.current)return;pending.current=true;setBusy(true);setError('');setResult('');
@@ -49,8 +61,10 @@ export default function Trade(){
    {!markets&&<ActivityIndicator color="#2dcc98"/>}
    <Text style={styles.copy}>{market?`Selected: ${market.symbol} (${market.provider})`:'Choose a market'}</Text>
    {market&&<MarketChart key={market.id} provider={market.provider} coin={market.coin}/> }
+   <View style={styles.field}><Text style={styles.copy}>{quickPrefs?.quickTradeEnabled?'One-tap risk · sends immediately':'Quick risk · review required'}</Text><View style={styles.row}>{(quickPrefs?.quickAmounts??[10,50,100]).map((amount,i)=><Pressable key={i} accessibilityRole="button" disabled={busy||quickUncertain} style={styles.direction} onPress={()=>quickPrefs?.quickTradeEnabled?void quickTrade(amount):setRisk(String(amount))}><Text style={styles.value}>${amount}</Text></Pressable>)}</View><Link href="/preferences" style={styles.link}>Edit quick amounts and one-tap settings</Link>{quickPrefs?.quickTradeEnabled&&<Text style={styles.warning}>Uses {side==='buy'?'Long':'Short'} · {leverage||'choose'}x · stop {stop||'choose'}% · reward/risk {reward||'choose'}. Tap sends immediately.</Text>}{quickUncertain&&<Pressable accessibilityRole="button" onPress={()=>Alert.alert('Check your orders first','Only continue after confirming the previous attempt in MyFundedPerps or Activity.',[{text:'Cancel',style:'cancel'},{text:'I checked my orders',onPress:()=>setQuickUncertain(false)}])}><Text style={styles.link}>Check previous order before another quick trade</Text></Pressable>}</View>
    {(search||!market?markets??[]:[]).filter(m=>`${m.symbol} ${m.provider}`.toLowerCase().includes(search.toLowerCase())).slice(0,8).map(m=><Pressable key={m.id} accessibilityRole="button" onPress={()=>setMarketId(m.id)} style={[styles.market,m.id===marketId&&styles.selected]}><Text style={styles.value}>{m.symbol}</Text><Text style={styles.small}>{m.provider}{m.maxLeverage?` · Up to ${m.maxLeverage}x`:''}</Text></Pressable>)}
    <View style={styles.row}>{(['buy','sell'] as const).map(direction=><Pressable accessibilityRole="button" accessibilityState={{selected:side===direction}} key={direction} style={[styles.direction,side===direction&&styles.selected]} onPress={()=>setSide(direction)}><Text style={styles.value}>{direction==='buy'?'Long':'Short'}</Text></Pressable>)}</View>
+   <Text style={styles.copy}>Select leverage</Text><View style={[styles.row,{flexWrap:'wrap'}]}>{[1,2,3,5,10,20,50].filter(v=>v<=(market?.maxLeverage??100)).map(v=><Pressable key={v} accessibilityRole="button" accessibilityState={{selected:Number(leverage)===v}} onPress={()=>setLeverage(String(v))} style={[styles.market,Number(leverage)===v&&styles.selected]}><Text style={styles.value}>{v}x</Text></Pressable>)}</View>
    {([{label:'Risk at stop ($)',value:risk,set:setRisk,hint:'Amount you choose to risk before fees'},{label:'Leverage (x)',value:leverage,set:setLeverage,hint:'Enter a whole number, e.g. 5'},{label:'Stop distance (%)',value:stop,set:setStop,hint:'Distance from entry, e.g. 1'},{label:'Reward / risk',value:reward,set:setReward,hint:'Target multiple, e.g. 2'}]).map(field=><View key={field.label} style={styles.field}><Text style={styles.copy}>{field.label}</Text><TextInput accessibilityLabel={field.label} keyboardType="decimal-pad" value={field.value} onChangeText={field.set} style={styles.input} placeholder={field.hint} placeholderTextColor="#82968b"/><Text style={styles.small}>{field.hint}</Text></View>)}
    <Text style={styles.small}>You choose your trade parameters. Personal guardrails follow your choices in Settings. MyFundedPerps performs final account and trading-rule checks.</Text>
    <Pressable accessibilityRole="button" disabled={busy||!marketId||!risk||!leverage||!stop||!reward} style={[styles.button,(busy||!marketId||!risk||!leverage||!stop||!reward)&&styles.disabled]} onPress={()=>void review()}><Text style={styles.buttonText}>Review trade</Text></Pressable>

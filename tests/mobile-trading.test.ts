@@ -47,4 +47,20 @@ describe('native trading',()=>{
   expect(await trading.confirm('session',ticket.id)).toMatchObject({status:'pending',dryRun:false});
   expect(send).toHaveBeenCalledWith(expect.objectContaining({idempotencyKey:ticket.id,size:ticket.size}));
  });
+ it('requires opt-in before a one-tap trade can submit',async()=>{
+  const {trading}=mocks();const send=vi.spyOn(MfpClient.prototype,'placeProtectedMarketOrder');
+  await expect(trading.quick('session',input)).rejects.toThrow();expect(send).not.toHaveBeenCalled();
+ });
+ it('executes a saved quick amount through the guarded quote and confirmation flow',async()=>{
+  const {auth,trading}=mocks();auth.connection.mockResolvedValue({...await auth.connection(),personal_guards:{mode:'off',quickTradeEnabled:true,quickAmounts:[10,65,100]}});
+  auth.saveTicket.mockImplementation(async(_session,ticket)=>auth.claimTicket.mockResolvedValue(ticket));
+  const send=vi.spyOn(MfpClient.prototype,'placeProtectedMarketOrder').mockResolvedValue({id:'quick-order',status:'pending'});
+  expect(await trading.quick('session',input)).toMatchObject({status:'pending',dryRun:false});expect(send).toHaveBeenCalledTimes(1);
+ });
+ it('blocks quick trades exceeding an enforced personal limit',async()=>{
+  const {auth,trading}=mocks();auth.connection.mockResolvedValue({...await auth.connection(),personal_guards:{mode:'enforce',maxRiskUsd:50,quickTradeEnabled:true,quickAmounts:[10,65,100]}});
+  const send=vi.spyOn(MfpClient.prototype,'placeProtectedMarketOrder');
+  await expect(trading.quick('session',input)).rejects.toThrow('personal trade limit');expect(send).not.toHaveBeenCalled();
+ });
+
 });

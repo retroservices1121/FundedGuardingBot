@@ -1,10 +1,9 @@
-import { NativeTabs } from 'expo-router/unstable-native-tabs';
-export default function TabsLayout() {
-  return <NativeTabs tintColor="#2dcc98" backgroundColor="#07120e">
-    <NativeTabs.Trigger name="index"><NativeTabs.Trigger.Icon sf="house" /><NativeTabs.Trigger.Label>Home</NativeTabs.Trigger.Label></NativeTabs.Trigger>
-    <NativeTabs.Trigger name="markets"><NativeTabs.Trigger.Icon sf="chart.bar" /><NativeTabs.Trigger.Label>Markets</NativeTabs.Trigger.Label></NativeTabs.Trigger>
-    <NativeTabs.Trigger name="trade"><NativeTabs.Trigger.Icon sf="arrow.up.right" /><NativeTabs.Trigger.Label>Trade</NativeTabs.Trigger.Label></NativeTabs.Trigger>
-    <NativeTabs.Trigger name="activity"><NativeTabs.Trigger.Icon sf="clock" /><NativeTabs.Trigger.Label>Activity</NativeTabs.Trigger.Label></NativeTabs.Trigger>
-    <NativeTabs.Trigger name="pulse"><NativeTabs.Trigger.Icon sf="waveform.path" /><NativeTabs.Trigger.Label>Pulse</NativeTabs.Trigger.Label></NativeTabs.Trigger>
-  </NativeTabs>;
-}
+import { Tabs } from 'expo-router';
+export default function TabsLayout(){return <Tabs screenOptions={{headerShown:false,tabBarActiveTintColor:'#2dcc98',tabBarInactiveTintColor:'#91a79a',tabBarStyle:{backgroundColor:'#07120e',borderTopColor:'#284237'},tabBarIcon:()=>null,tabBarIconStyle:{display:"none"},tabBarItemStyle:{justifyContent:"center",minHeight:48},tabBarLabelStyle:{fontSize:11,fontWeight:'600'}}}>
+ <Tabs.Screen name="index" options={{title:'Home'}}/>
+ <Tabs.Screen name="markets" options={{title:'Markets'}}/>
+ <Tabs.Screen name="trade" options={{title:'Trade'}}/>
+ <Tabs.Screen name="activity" options={{title:'Activity'}}/>
+ <Tabs.Screen name="pulse" options={{title:'Pulse'}}/>
+ <Tabs.Screen name="preferences" options={{title:'Settings'}}/>
+</Tabs>;}

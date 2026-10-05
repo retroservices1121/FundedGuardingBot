@@ -7,3 +7,12 @@ export function parseCandle(raw:Record<string,unknown>):Candle|null {
 }
 export function mergeCandle(bars:Candle[],bar:Candle,limit=70){return [...bars.filter(b=>b.time!==bar.time),bar].sort((a,b)=>a.time-b.time).slice(-limit);}
 export function chartRange(bars:Candle[],candles:boolean){const values=bars.flatMap(b=>candles?[b.high,b.low]:[b.close]);if(!values.length)return {low:0,high:1};const low=Math.min(...values),high=Math.max(...values),pad=Math.max((high-low)*0.08,high*0.00001);return {low:low-pad,high:high+pad};}
+
+export function applyTick(bars:Candle[],price:number,time:number,interval:string){
+ const duration=({'1m':60000,'5m':300000,'15m':900000,'30m':1800000,'1h':3600000,'4h':14400000} as Record<string,number>)[interval];
+ if(!duration||!Number.isFinite(price)||price<=0)return bars;
+ const bucket=Math.floor(time/duration)*duration,last=bars.at(-1);
+ if(last&&bucket<last.time)return bars;
+ const bar=last?.time===bucket?{...last,close:price,high:Math.max(last.high,price),low:Math.min(last.low,price)}:{time:bucket,open:price,high:price,low:price,close:price};
+ return mergeCandle(bars,bar);
+}
