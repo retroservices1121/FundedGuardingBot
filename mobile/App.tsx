@@ -1,6 +1,5 @@
-import AccountOnboarding from './src/components/AccountOnboarding';
-import { useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, View } from 'react-native';
+import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
+import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import Constants from 'expo-constants';
 import * as Apple from 'expo-apple-authentication';
@@ -28,7 +27,10 @@ async function request(path: string, method = 'GET', data?: unknown, token?: str
     return result;
   } finally { clearTimeout(timer); }
 }
-export default function App() {
+type Session = { token: string; user: User; request: typeof request; busy: boolean; leave: (remove?: boolean) => Promise<void>; error: string };
+const SessionContext = createContext<Session | null>(null);
+export function useSession() { const value = useContext(SessionContext); if (!value) throw new Error('Sign in first.'); return value; }
+export default function App({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [token, setToken] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -87,16 +89,13 @@ export default function App() {
     } catch (e) { setError(e instanceof Error ? e.message : 'Please try again.'); }
     finally { pending.current = false; setBusy(false); }
   }
+  if (user && token && !loading) return <SessionContext.Provider value={{user,token,request,busy,leave,error}}><StatusBar style="light" />{children}</SessionContext.Provider>;
   return <View style={styles.container}>
     <StatusBar style="light" />
     <Text style={styles.label}>FUNDED GUARDIAN</Text>
     {!user && <Text style={styles.title}>Your account.{'\n'}Less clutter.</Text>}
     <Text style={styles.description}>{user ? `Signed in with ${user.provider === 'apple' ? 'Apple' : 'Google'}.` : 'A simpler way to understand and manage your MyFundedPerps account.'}</Text>
-    {loading ? <ActivityIndicator color="#2dcc98" accessibilityLabel="Restoring session" /> : user ? <View style={styles.notice}>
-      <AccountOnboarding token={token!} request={request} />
-      <Pressable disabled={busy} accessibilityRole="button" onPress={() => void leave()}><Text style={styles.link}>Sign out</Text></Pressable>
-      <Pressable disabled={busy} accessibilityRole="button" onPress={() => Alert.alert('Delete Guardian account?', 'This deletes your native Guardian login and sessions. It does not delete your MyFundedPerps account.', [{ text: 'Cancel', style: 'cancel' }, { text: 'Delete', style: 'destructive', onPress: () => void leave(true) }])}><Text style={styles.delete}>Delete Guardian account</Text></Pressable>
-    </View> : token ? <Pressable accessibilityRole="button" onPress={() => { setLoading(true); setError(''); void hydrate(); }}><Text style={styles.link}>Retry session connection</Text></Pressable> : <View style={styles.buttons} pointerEvents={busy ? 'none' : 'auto'}>
+    {loading ? <ActivityIndicator color="#2dcc98" accessibilityLabel="Restoring session" /> : token ? <Pressable accessibilityRole="button" onPress={() => { setLoading(true); setError(''); void hydrate(); }}><Text style={styles.link}>Retry session connection</Text></Pressable> : <View style={styles.buttons} pointerEvents={busy ? 'none' : 'auto'}>
       {available && <Apple.AppleAuthenticationButton buttonType={Apple.AppleAuthenticationButtonType.CONTINUE} buttonStyle={Apple.AppleAuthenticationButtonStyle.WHITE} cornerRadius={8} style={styles.apple} onPress={() => void login('apple')} />}
       <GoogleSigninButton size={GoogleSigninButton.Size.Wide} color={GoogleSigninButton.Color.Light} disabled={busy || !apiUrl} style={styles.google} onPress={() => void login('google')} />
       {!apiUrl && <Text style={styles.description}>Server configuration is needed before you can sign in.</Text>}

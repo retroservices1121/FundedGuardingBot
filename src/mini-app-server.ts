@@ -570,6 +570,14 @@ export function startMiniAppServer(config: Config, db: Database) {
             await mobileAuth.saveConnection(token,{environment,encryptedApiKey:secrets.encrypt(apiKey),keyLastFour:apiKey.slice(-4),accountId:preferred.id});
             return json(response,200,{connected:true,accounts,selectedAccountId:preferred.id,keyLastFour:apiKey.slice(-4)});
           }
+          if (url.pathname === "/api/mobile/auth/markets" && request.method === "GET") {
+            await mobileAuth.user(token);
+            try {
+              const markets = (await new MfpClient(HOSTS.live, "").listMarkets()).filter(market => market.available !== false)
+                .map(market => ({id:market.id,symbol:marketSymbol(market),coin:marketCoin(market),provider:marketProvider(market),category:market.category,maxLeverage:market.max_leverage}));
+              return json(response,200,{markets});
+            } catch { return json(response,502,{error:"Could not load markets. Please try again."}); }
+          }
           if (url.pathname === "/api/mobile/auth/dashboard" && request.method === "GET") {
             const connection = await mobileAuth.connection(token);
             if (!connection) return json(response,400,{error:"Connect MyFundedPerps first."});

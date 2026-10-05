@@ -1,3 +1,4 @@
+import { useIsFocused } from 'expo-router/react-navigation';
 import { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, AppState, Pressable, StyleSheet, Text, View } from 'react-native';
 
@@ -19,9 +20,11 @@ function LossCard({title,rule}:{title:string;rule:LossRule}) {
   </View>;
 }
 export default function AccountDashboard({token,accountId,request}:Props) {
+  const focused = useIsFocused();
   const [data,setData]=useState<Data|null>(null),[error,setError]=useState(''),[busy,setBusy]=useState(false);
   const refresh=useRef<(()=>Promise<void>)|null>(null);
   useEffect(()=>{
+    if (!focused) return;
     let mounted=true,inFlight=false,interval=20000;
     let timer:ReturnType<typeof setTimeout>|undefined;
     async function load() {
@@ -35,7 +38,7 @@ export default function AccountDashboard({token,accountId,request}:Props) {
     void load();
     const listener=AppState.addEventListener('change',state=>{if(state==='active')void load();else if(timer)clearTimeout(timer);});
     return ()=>{mounted=false;refresh.current=null;if(timer)clearTimeout(timer);listener.remove();};
-  },[token,accountId,request]);
+  },[token,accountId,request,focused]);
   return <View style={styles.container}>
     <Text style={styles.heading}>Account overview</Text>
     {!data&&busy&&<ActivityIndicator color="#2dcc98" />}

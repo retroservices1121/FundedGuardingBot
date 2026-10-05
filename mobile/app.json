@@ -31,7 +31,8 @@
           "iosUrlScheme": "com.googleusercontent.apps.174585846381-7nrqvpr243ndbk91gst8mjrubhkmnbdk"
         }
       ],
-      "expo-apple-authentication"
+      "expo-apple-authentication",
+      "expo-router"
     ],
     "owner": "retroservices1121",
     "extra": {
@@ -46,6 +47,7 @@
     },
     "updates": {
       "url": "https://u.expo.dev/deae9845-3714-4024-ba37-0d2b3042ec9e"
-    }
+    },
+    "scheme": "fundedguardian"
   }
 }
