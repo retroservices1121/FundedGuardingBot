@@ -22,6 +22,12 @@ export class MobileAuth {
         id UUID PRIMARY KEY, provider TEXT NOT NULL, subject TEXT NOT NULL,
         email TEXT, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), UNIQUE(provider, subject)
       );
+      CREATE TABLE IF NOT EXISTS mobile_connections (
+        identity_id UUID PRIMARY KEY REFERENCES mobile_identities(id) ON DELETE CASCADE,
+        environment TEXT NOT NULL CHECK(environment IN ('live','sandbox')),
+        encrypted_api_key TEXT NOT NULL, key_last_four TEXT NOT NULL,
+        selected_account_id TEXT NOT NULL, guardian_mode TEXT NOT NULL DEFAULT 'off'
+      );
       CREATE TABLE IF NOT EXISTS mobile_sessions (
         token_hash TEXT PRIMARY KEY, identity_id UUID NOT NULL REFERENCES mobile_identities(id) ON DELETE CASCADE,
         expires_at TIMESTAMPTZ NOT NULL
@@ -74,6 +80,25 @@ export class MobileAuth {
     const result = await this.db.pool.query(`SELECT i.id,i.provider,i.email FROM mobile_sessions s JOIN mobile_identities i ON i.id=s.identity_id WHERE s.token_hash=$1 AND s.expires_at>NOW()`, [hash(token)]);
     if (!result.rows[0]) throw new Error('Session expired. Please sign in again.');
     return result.rows[0];
+  }
+  async connection(token: string) {
+    const user = await this.user(token);
+    const result = await this.db.pool.query(`SELECT * FROM mobile_connections WHERE identity_id=$1`, [user.id]);
+    return result.rows[0];
+  }
+  async saveConnection(token: string, input: { environment: string; encryptedApiKey: string; keyLastFour: string; accountId: string }) {
+    const user = await this.user(token);
+    await this.db.pool.query(`INSERT INTO mobile_connections (identity_id,environment,encrypted_api_key,key_last_four,selected_account_id) VALUES ($1,$2,$3,$4,$5)
+      ON CONFLICT(identity_id) DO UPDATE SET environment=$2,encrypted_api_key=$3,key_last_four=$4,selected_account_id=$5`,
+      [user.id,input.environment,input.encryptedApiKey,input.keyLastFour,input.accountId]);
+  }
+  async selectAccount(token: string, id: string) {
+    const user = await this.user(token);
+    await this.db.pool.query(`UPDATE mobile_connections SET selected_account_id=$2 WHERE identity_id=$1`, [user.id,id]);
+  }
+  async disconnect(token: string) {
+    const user = await this.user(token);
+    await this.db.pool.query(`DELETE FROM mobile_connections WHERE identity_id=$1`, [user.id]);
   }
   async logout(token: string) { await this.db.pool.query(`DELETE FROM mobile_sessions WHERE token_hash=$1`, [hash(token)]); }
   async delete(token: string) {

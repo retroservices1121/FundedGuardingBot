@@ -1,3 +1,4 @@
+import AccountOnboarding from './src/components/AccountOnboarding';
 import { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, View } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
@@ -89,11 +90,10 @@ export default function App() {
   return <View style={styles.container}>
     <StatusBar style="light" />
     <Text style={styles.label}>FUNDED GUARDIAN</Text>
-    <Text style={styles.title}>{user ? 'Welcome to Guardian.' : 'Your account.\nLess clutter.'}</Text>
+    {!user && <Text style={styles.title}>Your account.{'\n'}Less clutter.</Text>}
     <Text style={styles.description}>{user ? `Signed in with ${user.provider === 'apple' ? 'Apple' : 'Google'}.` : 'A simpler way to understand and manage your MyFundedPerps account.'}</Text>
     {loading ? <ActivityIndicator color="#2dcc98" accessibilityLabel="Restoring session" /> : user ? <View style={styles.notice}>
-      <Text style={styles.noticeTitle}>Your Guardian account is ready</Text>
-      <Text style={styles.description}>MyFundedPerps account connection is the next step. Trading is not available in this native preview yet.</Text>
+      <AccountOnboarding token={token!} request={request} />
       <Pressable disabled={busy} accessibilityRole="button" onPress={() => void leave()}><Text style={styles.link}>Sign out</Text></Pressable>
       <Pressable disabled={busy} accessibilityRole="button" onPress={() => Alert.alert('Delete Guardian account?', 'This deletes your native Guardian login and sessions. It does not delete your MyFundedPerps account.', [{ text: 'Cancel', style: 'cancel' }, { text: 'Delete', style: 'destructive', onPress: () => void leave(true) }])}><Text style={styles.delete}>Delete Guardian account</Text></Pressable>
     </View> : token ? <Pressable accessibilityRole="button" onPress={() => { setLoading(true); setError(''); void hydrate(); }}><Text style={styles.link}>Retry session connection</Text></Pressable> : <View style={styles.buttons} pointerEvents={busy ? 'none' : 'auto'}>
@@ -111,7 +111,7 @@ const styles = StyleSheet.create({
   label: { color: '#2dcc98', fontWeight: '700', letterSpacing: 3, fontSize: 13 },
   title: { color: '#f4f8f5', fontSize: 40, fontWeight: '700' },
   description: { color: '#a9bbb2', fontSize: 17, lineHeight: 26 },
-  notice: { backgroundColor: '#12261c', borderRadius: 20, padding: 20, gap: 16 },
+  notice: { flexShrink: 1, backgroundColor: '#12261c', borderRadius: 20, padding: 20, gap: 16 },
   noticeTitle: { color: '#f4f8f5', fontSize: 18, fontWeight: '600' },
   buttons: { gap: 12 }, apple: { width: '100%', height: 48 }, google: { width: '100%', height: 48 },
   link: { color: '#2dcc98', fontSize: 17, paddingVertical: 10 }, delete: { color: '#ff9c9c', fontSize: 15, paddingVertical: 8 },

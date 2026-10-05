@@ -555,6 +555,41 @@ export function startMiniAppServer(config: Config, db: Database) {
             if ((input.provider !== "apple" && input.provider !== "google") || typeof input.idToken !== "string" || input.idToken.length > 16000) return json(response, 400, { error: "Invalid sign-in request." });
             return json(response, 200, await mobileAuth.login(input.provider, input.idToken, typeof input.nonce === "string" ? input.nonce : undefined));
           }
+          if (url.pathname === "/api/mobile/auth/connect" && request.method === "POST") {
+            await mobileAuth.user(token);
+            const input = await body(request);
+            const apiKey = typeof input.apiKey === "string" ? input.apiKey.trim() : "";
+            if (!/^fp_(test|live)_[A-Za-z0-9_-]+$/.test(apiKey)) return json(response,400,{error:"Paste a key beginning fp_live_ or fp_test_."});
+            const environment = apiKey.startsWith("fp_test_") ? "sandbox" : "live";
+            if (environment === "live" && !config.ALLOW_LIVE_TRADING) return json(response,400,{error:"Live account connections are not enabled yet."});
+            let accounts;
+            try { accounts = (await new MfpClient(HOSTS[environment],apiKey).listAccounts()).filter(isActiveAccount); }
+            catch { return json(response,400,{error:"MyFundedPerps could not verify this key. Check that it is valid and try again."}); }
+            if (!accounts.length) return json(response,400,{error:"This key has no active accounts."});
+            const preferred = accounts[0]!;
+            await mobileAuth.saveConnection(token,{environment,encryptedApiKey:secrets.encrypt(apiKey),keyLastFour:apiKey.slice(-4),accountId:preferred.id});
+            return json(response,200,{connected:true,accounts,selectedAccountId:preferred.id,keyLastFour:apiKey.slice(-4)});
+          }
+          if (url.pathname === "/api/mobile/auth/connection" && request.method === "GET") {
+            const connection = await mobileAuth.connection(token);
+            if (!connection) return json(response,200,{connected:false});
+            const client = new MfpClient(HOSTS[connection.environment as keyof typeof HOSTS],secrets.decrypt(connection.encrypted_api_key));
+            let accounts;
+            try { accounts = (await client.listAccounts()).filter(isActiveAccount); }
+            catch { return json(response,502,{error:"Could not refresh MyFundedPerps accounts. Try again."}); }
+            return json(response,200,{connected:true,accounts,selectedAccountId:connection.selected_account_id,keyLastFour:connection.key_last_four});
+          }
+          if (url.pathname === "/api/mobile/auth/account-selection" && request.method === "POST") {
+            const connection = await mobileAuth.connection(token);
+            if (!connection) return json(response,400,{error:"Connect MyFundedPerps first."});
+            const input = await body(request);
+            const client = new MfpClient(HOSTS[connection.environment as keyof typeof HOSTS],secrets.decrypt(connection.encrypted_api_key));
+            const accounts = (await client.listAccounts()).filter(isActiveAccount);
+            if (!accounts.some(account => account.id === input.accountId)) return json(response,400,{error:"Choose an active account belonging to your API key."});
+            await mobileAuth.selectAccount(token,String(input.accountId));
+            return json(response,200,{ok:true});
+          }
+          if (url.pathname === "/api/mobile/auth/connection" && request.method === "DELETE") { await mobileAuth.disconnect(token); return json(response,200,{ok:true}); }
           if (url.pathname === "/api/mobile/auth/me" && request.method === "GET") return json(response, 200, { user: await mobileAuth.user(token) });
           if (url.pathname === "/api/mobile/auth/logout" && request.method === "POST") { await mobileAuth.logout(token); return json(response, 200, { ok: true }); }
           if (url.pathname === "/api/mobile/auth/account" && request.method === "DELETE") { await mobileAuth.delete(token); return json(response, 200, { ok: true }); }
