@@ -51,7 +51,7 @@ export default function Activity(){
   finally{pending.current=false;setAction(false);}
  }
  const positions=data?.[tab]??[];
- return <SafeAreaView style={styles.page} edges={['top']}><ScrollView contentContainerStyle={styles.content} refreshControl={<RefreshControl refreshing={busy} onRefresh={()=>void refresh.current?.()} tintColor="#2dcc98"/>}>
+ return <SafeAreaView style={styles.page} edges={['top']}><ScrollView showsVerticalScrollIndicator={false} showsHorizontalScrollIndicator={false} contentContainerStyle={styles.content} refreshControl={<RefreshControl refreshing={busy} onRefresh={()=>void refresh.current?.()} tintColor="#2dcc98"/>}>
   <Text style={styles.heading}>Activity</Text><View style={styles.row}>{(['open','closed'] as const).map(value=><Pressable accessibilityRole="button" accessibilityState={{selected:tab===value}} key={value} onPress={()=>setTab(value)} style={[styles.toggle,tab===value&&styles.selected]}><Text style={styles.value}>{value==='open'?'Open positions':'Closed positions'}</Text></Pressable>)}</View>
   {!!notice&&<Text accessibilityRole="alert" style={styles.green}>{notice}</Text>}{!!error&&<Text accessibilityRole="alert" style={styles.error}>{error}{data?' Showing last received data.':''}</Text>}
   {!data&&busy&&<ActivityIndicator color="#2dcc98"/>}

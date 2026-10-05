@@ -35,7 +35,7 @@ export default function AccountOnboarding({ token, request,manage=true,showDashb
     } catch (e) { setError(e instanceof Error ? e.message : 'Could not save. Please try again.'); }
     finally { pending.current = false; setBusy(false); }
   }
-  return <ScrollView style={styles.scroll} keyboardShouldPersistTaps="handled" contentContainerStyle={styles.content}>
+  return <ScrollView showsVerticalScrollIndicator={false} showsHorizontalScrollIndicator={false} style={styles.scroll} keyboardShouldPersistTaps="handled" contentContainerStyle={styles.content}>
     <Text style={styles.heading}>{connection?.connected ? 'Choose your account' : 'Connect MyFundedPerps'}</Text>
     {connection?.connected ? <>
       {showDashboard&&connection.selectedAccountId && <AccountDashboard key={connection.selectedAccountId} token={token} accountId={connection.selectedAccountId} request={request} />}
