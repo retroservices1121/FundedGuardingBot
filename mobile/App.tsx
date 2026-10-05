@@ -8,7 +8,7 @@ import { GoogleSignin, GoogleSigninButton, isSuccessResponse } from '@react-nati
 
 type User = { id: string; provider: string; email?: string };
 const key = 'guardian.native.session';
-const apiUrl = process.env.EXPO_PUBLIC_API_URL?.replace(/\/$/, '');
+const apiUrl = (process.env.EXPO_PUBLIC_API_URL ?? Constants.expoConfig?.extra?.apiUrl)?.replace(/\/$/, '');
 GoogleSignin.configure({ iosClientId: Constants.expoConfig?.extra?.googleIosClientId });
 class SessionError extends Error {}
 async function request(path: string, method = 'GET', data?: unknown, token?: string) {
