@@ -1,3 +1,4 @@
+import { router } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, AppState, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -63,6 +64,7 @@ export default function Activity(){
    <View style={styles.row}><Text style={styles.copy}>{tab==='open'?'Mark / mid':'Exit'}</Text><Text style={styles.value}>{money(tab==='open'?mark:p.exit_price)}</Text></View>
    <View style={styles.row}><Text style={styles.copy}>{tab==='open'?'Estimated close fee':'Reported fees'}</Text><Text style={styles.value}>{money(tab==='open'?p.estimatedCloseFee:p.fees)}</Text></View>
    <Text style={styles.small}>Size {p.size}</Text>
+   <Pressable accessibilityRole="button" disabled={action} onPress={()=>router.push({pathname:tab==='open'?'/protection':'/share-card',params:{positionId:p.id}})}><Text style={styles.green}>{tab==='open'?'Edit TP/SL':'Create share card'}</Text></Pressable>
    {tab==='open'?<View style={styles.row}>{[25,50,100].map(percent=><Pressable key={percent} accessibilityRole="button" disabled={action||busy} style={styles.close} onPress={()=>void prepareClose(p,percent)}><Text style={styles.value}>{percent===100?'Close all':`Close ${percent}%`}</Text></Pressable>)}</View>:p.closed_at!=null&&<Text style={styles.small}>{new Date(p.closed_at<1e10?p.closed_at*1000:p.closed_at).toLocaleString()}</Text>}
   </View>})}
   {data&&<Text style={styles.small}>{tab==='closed'?'Latest 50 closed positions. ':''}Account data updated {new Date(data.updatedAt).toLocaleTimeString()}.</Text>}

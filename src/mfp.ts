@@ -217,7 +217,7 @@ export class MfpClient {
     });
   }
 
-  replacePositionExits(position: Position, currentOrders: WorkingOrder[], takeProfitPrice: number, stopLossPrice: number) {
+  replacePositionExits(position: Position, currentOrders: WorkingOrder[], takeProfitPrice: number, stopLossPrice: number, idempotencyKey = randomUUID()) {
     if (![takeProfitPrice, stopLossPrice].every(value => Number.isFinite(value) && value > 0)) throw new Error("TP and SL prices must be positive.");
     const exits = positionExitOrders(currentOrders, position);
     const expected = exits.flatMap((order) => {
@@ -237,6 +237,7 @@ export class MfpClient {
     );
     return this.request<Record<string, unknown>>(`/v1/positions/${encodeURIComponent(position.id)}/exit-orders`, {
       method: "PUT",
+      headers: { "Idempotency-Key": idempotencyKey },
       body: JSON.stringify({ expected_position_size: position.size, expected_orders: expected, operations }),
     });
   }

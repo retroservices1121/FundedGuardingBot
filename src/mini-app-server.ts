@@ -589,6 +589,19 @@ export function startMiniAppServer(config: Config, db: Database) {
             await mobileAuth.user(token);
             return json(response,200,{items:await db.pulseItems(),updatedAt:new Date().toISOString()});
           }
+          if(url.pathname==='/api/mobile/auth/protection'&&request.method==='POST'){
+            const input=await body(request);if(typeof input.positionId!=='string')throw new Error('Choose an open position.');
+            return json(response,200,await mobileActivity.protection(token,input.positionId));
+          }
+          if(url.pathname==='/api/mobile/auth/share'&&request.method==='POST'){
+            const input=await body(request);if(typeof input.positionId!=='string')throw new Error('Choose a closed position.');
+            return json(response,200,await mobileActivity.share(token,input.positionId));
+          }
+          if(url.pathname==='/api/mobile/auth/protection/quote'&&request.method==='POST')return json(response,200,await mobileActivity.quoteProtection(token,await body(request)));
+          if(url.pathname==='/api/mobile/auth/protection/confirm'&&request.method==='POST'){
+            const input=await body(request);if(typeof input.ticketId!=='string')throw new Error('Review an edit first.');
+            return json(response,200,await mobileActivity.confirmProtection(token,input.ticketId));
+          }
           if (url.pathname === "/api/mobile/auth/activity" && request.method === "GET") {
             await mobileAuth.user(token);
             try { return json(response,200,await mobileActivity.list(token)); }

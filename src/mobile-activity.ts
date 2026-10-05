@@ -1,6 +1,8 @@
+import { createClosedPositionShareCard } from "./share-card.js";
+import type { Position } from "./types.js";
 import { randomUUID } from 'node:crypto';
 import { MobileAuth } from './mobile-auth.js';
-import { MfpClient } from './mfp.js';
+import { MfpClient, positionExitOrders } from './mfp.js';
 import { SecretBox } from './crypto.js';
 import type { Config } from './config.js';
 export function closeSize(size:number,percent:number,precision:number){
@@ -43,6 +45,7 @@ export class MobileActivity {
   if(connection.environment==='live'&&!this.config.ALLOW_LIVE_TRADING)throw new Error('Live account operations are disabled.');
   const ticket=await this.auth.claimClose(token,id);
   if(!ticket)throw new Error('This close quote expired or was already submitted. Refresh positions before trying again.');
+  if(ticket.kind==='protection')throw new Error('This is not a close quote.');
   if(ticket.accountId!==connection.selected_account_id)throw new Error('Account changed. Review a new close quote.');
   const positions=await client.listOpenPositions(ticket.accountId),position=positions.find(p=>p.id===ticket.positionId);
   if(!position||Math.abs(position.size)!==ticket.originalSize)throw new Error('Position size changed. Refresh and review a new close quote.');
@@ -53,4 +56,56 @@ export class MobileActivity {
   try{const result=await client.closePosition(position.id,ticket.size,quote.mid,ticket.id);return {dryRun:false,status:String(result.status??'pending')};}
   catch(e){throw new Error(`${e instanceof Error?e.message:'Close response unavailable.'} Check MyFundedPerps before attempting another close.`);}
  }
+ async share(token:string,positionId:string){
+  const {connection,client}=await this.session(token);
+  const position=(await client.listClosedPositions(connection.selected_account_id,50)).find(p=>p.id===positionId);
+  if(!position)throw new Error('Closed position unavailable on the selected account.');
+  if(typeof position.realized_pnl!=='number'||!Number.isFinite(position.realized_pnl))throw new Error('Realized P&L is unavailable. Refresh before sharing.');
+  const image=await createClosedPositionShareCard(position);
+  return {imageBase64:image.toString('base64')};
+ }
+ async protection(token:string,positionId:string){
+  const {connection,client}=await this.session(token);
+  const [positions,orders]=await Promise.all([client.listOpenPositions(connection.selected_account_id),client.listWorkingOrders(connection.selected_account_id)]);
+  const position=positions.find(p=>p.id===positionId);if(!position)throw new Error('Position is no longer open on this account.');
+  const quote=await client.getQuote(position.market_id);
+  return {position,markPrice:quote.mid,orders:positionExitOrders(orders,position)};
+ }
+ async quoteProtection(token:string,input:Record<string,unknown>){
+  const {connection,client}=await this.session(token);
+  const position=(await client.listOpenPositions(connection.selected_account_id)).find(p=>p.id===input.positionId);
+  if(!position)throw new Error('Position is no longer open on this account.');
+  const orders=await client.listWorkingOrders(connection.selected_account_id);
+  const expectedOrders=exitSnapshot(positionExitOrders(orders,position));
+  const takeProfitPrice=Number(input.takeProfitPrice),stopLossPrice=Number(input.stopLossPrice);
+  const quote=await client.getQuote(position.market_id);
+  validateProtection(position,quote.mid,takeProfitPrice,stopLossPrice);
+  const ticket={id:randomUUID(),kind:'protection',expectedOrders,accountId:connection.selected_account_id,positionId:position.id,originalSize:position.size,takeProfitPrice,stopLossPrice,expiresAt:Date.now()+this.config.CONFIRMATION_TTL_SECONDS*1000};
+  await this.auth.saveClose(token,ticket);return {ticket,dryRun:this.config.DRY_RUN};
+ }
+ async confirmProtection(token:string,id:string){
+  const {connection,client}=await this.session(token);
+  if(connection.environment==='live'&&!this.config.ALLOW_LIVE_TRADING)throw new Error('Live account operations are disabled.');
+  const ticket=await this.auth.claimClose(token,id);
+  if(!ticket||ticket.kind!=='protection')throw new Error('Edit quote expired or already submitted. Refresh before trying again.');
+  if(ticket.accountId!==connection.selected_account_id)throw new Error('Account changed. Review again.');
+  const [positions,orders]=await Promise.all([client.listOpenPositions(ticket.accountId),client.listWorkingOrders(ticket.accountId)]);
+  const position=positions.find(p=>p.id===ticket.positionId);
+  if(!position||position.size!==ticket.originalSize)throw new Error('Position size changed. Review again.');
+  if(JSON.stringify(exitSnapshot(positionExitOrders(orders,position)))!==JSON.stringify(ticket.expectedOrders))throw new Error('Working exits changed. Refresh and review again.');
+  const quote=await client.getQuote(position.market_id);
+  validateProtection(position,quote.mid,ticket.takeProfitPrice,ticket.stopLossPrice);
+  if(Date.now()>=ticket.expiresAt)throw new Error('Edit quote expired. Review again.');
+  if(this.config.DRY_RUN)return {dryRun:true,status:'validated'};
+  try{const result=await client.replacePositionExits(position,orders,ticket.takeProfitPrice,ticket.stopLossPrice,ticket.id);return {dryRun:false,status:String(result.status??'submitted')};}
+  catch(e){throw new Error(`${e instanceof Error?e.message:'Edit response unavailable.'} Check MyFundedPerps before retrying.`);}
+ }
+
 }
+
+export function validateProtection(position:Pick<Position,'side'>,reference:number,tp:number,sl:number){
+ if(![reference,tp,sl].every(v=>Number.isFinite(v)&&v>0))throw new Error('Enter positive TP and SL prices. A fresh market price is required.');
+ if(position.side==='long'?!(tp>reference&&sl<reference):!(tp<reference&&sl>reference))throw new Error('TP and SL must be on opposite sides of the current market price for this direction.');
+}
+
+function exitSnapshot(orders:import('./types.js').WorkingOrder[]){return orders.map(o=>({id:o.id,size:o.size,price:o.trigger_price??o.limit_price??o.price})).sort((a,b)=>a.id.localeCompare(b.id));}

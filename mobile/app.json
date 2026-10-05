@@ -2,7 +2,7 @@
   "expo": {
     "name": "Funded Guardian",
     "slug": "guardian",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "dark",
@@ -32,7 +32,8 @@
         }
       ],
       "expo-apple-authentication",
-      "expo-router"
+      "expo-router",
+      "expo-sharing"
     ],
     "owner": "retroservices1121",
     "extra": {

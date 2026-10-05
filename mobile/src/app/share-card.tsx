@@ -1,0 +1,14 @@
+import { useEffect, useRef, useState } from 'react';
+import { ActivityIndicator, Image, Pressable, ScrollView, StyleSheet, Text } from 'react-native';
+import { File, Paths } from 'expo-file-system';
+import * as Sharing from 'expo-sharing';
+import { useLocalSearchParams } from 'expo-router';
+import { useSession } from '../../App';
+export default function ShareCard(){
+ const {positionId}=useLocalSearchParams<{positionId:string}>(),{request,token}=useSession();
+ const [uri,setUri]=useState(''),[error,setError]=useState(''),[busy,setBusy]=useState(false);const file=useRef<File|null>(null),sharing=useRef(false);
+ useEffect(()=>{let mounted=true;request('share','POST',{positionId},token).then(result=>{if(!mounted)return;const image=new File(Paths.cache,`guardian-share-${Math.random().toString(36).slice(2)}.png`);image.create({overwrite:true});image.write(result.imageBase64,{encoding:'base64'});file.current=image;setUri(image.uri);}).catch(e=>{if(mounted)setError(e.message??'Could not create card.');});return()=>{mounted=false;if(!sharing.current&&file.current?.exists)file.current.delete();};},[request,token,positionId]);
+ async function share(){if(sharing.current||!uri)return;sharing.current=true;setBusy(true);try{if(!await Sharing.isAvailableAsync())throw new Error('Sharing is unavailable on this device.');await Sharing.shareAsync(uri,{mimeType:'image/png',UTI:'public.png',dialogTitle:'Share your closed position'});}catch(e){setError(e instanceof Error?e.message:'Could not share image.');}finally{sharing.current=false;setBusy(false);}}
+ return <ScrollView style={styles.page} contentContainerStyle={styles.content}><Text style={styles.title}>Your trade card</Text><Text style={styles.copy}>Preview your closed-position card before sharing. Your account balance and API key are never included.</Text>{!!uri?<Image source={{uri}} style={styles.image} resizeMode="contain" accessibilityLabel="Funded Guardian closed-position share card"/>:!error&&<ActivityIndicator color="#2dcc98"/>}{!!error&&<Text accessibilityRole="alert" style={styles.error}>{error}</Text>}<Pressable accessibilityRole="button" disabled={!uri||busy} onPress={()=>void share()} style={styles.button}><Text style={styles.value}>{busy?'Opening share sheet…':'Share or save PNG'}</Text></Pressable><Text style={styles.copy}>Choose X or another app in the share sheet, or Save to Files to keep the image. Available destinations depend on your device.</Text></ScrollView>;
+}
+const styles=StyleSheet.create({page:{flex:1,backgroundColor:'#07120e'},content:{padding:22,gap:20,paddingBottom:50},title:{color:'#fff',fontSize:26,fontWeight:'700'},copy:{color:'#a9bbb2',lineHeight:24,fontSize:16},image:{width:'100%',aspectRatio:1200/675},error:{color:'#ff9c9c',lineHeight:23},button:{padding:16,borderRadius:12,backgroundColor:'#24533e',alignItems:'center'},value:{color:'#fff',fontWeight:'600'}});
