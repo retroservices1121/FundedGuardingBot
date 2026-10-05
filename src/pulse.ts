@@ -98,11 +98,6 @@ function openButton(botUsername: string, symbol?: string, sourceUrl?: string, so
 }
 
 export function startPulseChannel(config: Config, db: Database, telegram: Api, botUsername: string) {
-  if (!config.PULSE_CHANNEL_ID) {
-    console.log("Funded Guardian Pulse is disabled (PULSE_CHANNEL_ID is not set).");
-    return;
-  }
-
   const channelId = config.PULSE_CHANNEL_ID;
   const ticks = new Map<string, Tick[]>();
   const candles = new Map<string, Candle[]>();
@@ -130,7 +125,8 @@ export function startPulseChannel(config: Config, db: Database, telegram: Api, b
   const cooldownBucket = () => Math.floor(Date.now() / (config.PULSE_ALERT_COOLDOWN_MINUTES * 60_000));
 
   async function publish(key: string, text: string, symbol?: string, sourceUrl?: string, sourceName?: string) {
-    if (!await db.claimPulsePublication(key)) return;
+    await db.savePulseItem({id:key,kind:sourceUrl?'news':key.startsWith('brief:')?'brief':'market',title:text.split('\n')[0]??'Market alert',body:text,symbol,sourceUrl,sourceName});
+    if (!channelId || !await db.claimPulsePublication(key)) return;
     try {
       await telegram.sendMessage(channelId, text, { reply_markup: openButton(botUsername, symbol, sourceUrl, sourceName), link_preview_options: { is_disabled: true } });
       publishedAt = Date.now();
@@ -345,6 +341,7 @@ export function startPulseChannel(config: Config, db: Database, telegram: Api, b
   }
 
   void (async () => {
+    if (!channelId) { channelCheck = "not configured; native feed active"; return; }
     try {
       const [chat, me] = await Promise.all([telegram.getChat(channelId), telegram.getMe()]);
       const membership = await telegram.getChatMember(channelId, me.id);

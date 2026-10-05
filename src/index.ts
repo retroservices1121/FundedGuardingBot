@@ -3,11 +3,13 @@ import { createGuardianBot } from "./bot.js";
 import { Database } from "./db.js";
 import { startMiniAppServer } from "./mini-app-server.js";
 import { startGuardianMonitor } from "./monitor.js";
+import { startPulseNews } from "./pulse-news.js";
 import { startPulseChannel } from "./pulse.js";
 
 const config = loadConfig();
 const db = new Database(config.DATABASE_URL);
 await db.migrate();
+startPulseNews(db);
 startMiniAppServer(config, db);
 const bot = createGuardianBot(config, db);
 

@@ -578,6 +578,10 @@ export function startMiniAppServer(config: Config, db: Database) {
             await mobileAuth.saveConnection(token,{environment,encryptedApiKey:secrets.encrypt(apiKey),keyLastFour:apiKey.slice(-4),accountId:preferred.id});
             return json(response,200,{connected:true,accounts,selectedAccountId:preferred.id,keyLastFour:apiKey.slice(-4)});
           }
+          if (url.pathname === "/api/mobile/auth/pulse" && request.method === "GET") {
+            await mobileAuth.user(token);
+            return json(response,200,{items:await db.pulseItems(),updatedAt:new Date().toISOString()});
+          }
           if (url.pathname === "/api/mobile/auth/activity" && request.method === "GET") {
             await mobileAuth.user(token);
             try { return json(response,200,await mobileActivity.list(token)); }

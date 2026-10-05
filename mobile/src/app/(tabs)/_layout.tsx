@@ -5,5 +5,6 @@ export default function TabsLayout() {
     <NativeTabs.Trigger name="markets"><NativeTabs.Trigger.Icon sf="chart.bar" /><NativeTabs.Trigger.Label>Markets</NativeTabs.Trigger.Label></NativeTabs.Trigger>
     <NativeTabs.Trigger name="trade"><NativeTabs.Trigger.Icon sf="arrow.up.right" /><NativeTabs.Trigger.Label>Trade</NativeTabs.Trigger.Label></NativeTabs.Trigger>
     <NativeTabs.Trigger name="activity"><NativeTabs.Trigger.Icon sf="clock" /><NativeTabs.Trigger.Label>Activity</NativeTabs.Trigger.Label></NativeTabs.Trigger>
+    <NativeTabs.Trigger name="pulse"><NativeTabs.Trigger.Icon sf="waveform.path" /><NativeTabs.Trigger.Label>Pulse</NativeTabs.Trigger.Label></NativeTabs.Trigger>
   </NativeTabs>;
 }

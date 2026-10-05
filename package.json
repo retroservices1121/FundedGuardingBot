@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "dotenv": "^16.6.1",
+    "fast-xml-parser": "^5.11.2",
     "grammy": "^1.38.2",
     "jose": "^6.2.12",
     "pg": "^8.16.3",

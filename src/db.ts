@@ -103,6 +103,11 @@ export class Database {
         executed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
       CREATE INDEX IF NOT EXISTS trade_executions_time_idx ON trade_executions(executed_at DESC);
+      CREATE TABLE IF NOT EXISTS pulse_feed_items (
+        id TEXT PRIMARY KEY, kind TEXT NOT NULL, title TEXT NOT NULL, body TEXT NOT NULL,
+        symbol TEXT, source_url TEXT, source_name TEXT, published_at TIMESTAMPTZ NOT NULL
+      );
+      DELETE FROM pulse_feed_items WHERE published_at < NOW() - INTERVAL '30 days';
       CREATE TABLE IF NOT EXISTS pulse_publications (
         dedupe_key TEXT PRIMARY KEY,
         published_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -232,6 +237,14 @@ export class Database {
        closed_position_ids=$4, risk_band=$5, updated_at=NOW()`,
       [telegramId, state.accountId, JSON.stringify(state.openPositionIds), JSON.stringify(state.closedPositionIds), state.riskBand],
     );
+  }
+
+  async savePulseItem(item: {id:string;kind:string;title:string;body:string;symbol?:string;sourceUrl?:string;sourceName?:string;publishedAt?:string}) {
+    await this.pool.query(`INSERT INTO pulse_feed_items (id,kind,title,body,symbol,source_url,source_name,published_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT DO NOTHING`, [item.id,item.kind,item.title,item.body,item.symbol,item.sourceUrl,item.sourceName,item.publishedAt??new Date().toISOString()]);
+  }
+  async pulseItems() {
+    const result=await this.pool.query(`SELECT id,kind,title,body,symbol,source_url AS "sourceUrl",source_name AS "sourceName",published_at AS "publishedAt" FROM pulse_feed_items WHERE published_at > NOW() - INTERVAL '7 days' ORDER BY published_at DESC LIMIT 100`);
+    return result.rows;
   }
 
   async claimPulsePublication(dedupeKey: string) {
