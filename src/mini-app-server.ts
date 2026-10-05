@@ -1,3 +1,4 @@
+import { MobileActivity } from "./mobile-activity.js";
 import { MobileTrading } from "./mobile-trading.js";
 import { MobileAuth } from "./mobile-auth.js";
 import { randomUUID } from "node:crypto";
@@ -61,6 +62,7 @@ function marketProvider(market: Market) {
 
 export function startMiniAppServer(config: Config, db: Database) {
   const mobileAuth = new MobileAuth(db);
+  const mobileActivity = new MobileActivity(mobileAuth, config);
   const mobileTrading = new MobileTrading(mobileAuth, config);
   const mobileAuthReady = mobileAuth.migrate();
   mobileAuthReady.catch(() => console.error("Mobile authentication database setup failed."));
@@ -542,7 +544,11 @@ export function startMiniAppServer(config: Config, db: Database) {
     try {
       if (url.pathname.startsWith("/api/mobile/auth/")) {
         await mobileAuthReady;
-        const address = request.socket.remoteAddress ?? "unknown";
+        let address = request.socket.remoteAddress ?? "unknown";
+        if (request.headers.authorization?.startsWith("Bearer ")) {
+          try { address = `mobile:${(await mobileAuth.user(request.headers.authorization.slice(7))).id}`; }
+          catch { return json(response,401,{error:"Session expired. Please sign in again."}); }
+        }
         const now = Date.now();
         for (const [key, value] of authRequests) if (value.until < now) authRequests.delete(key);
         const limit = authRequests.get(address) ?? { count: 0, until: now + 60_000 };
@@ -571,6 +577,22 @@ export function startMiniAppServer(config: Config, db: Database) {
             const preferred = accounts[0]!;
             await mobileAuth.saveConnection(token,{environment,encryptedApiKey:secrets.encrypt(apiKey),keyLastFour:apiKey.slice(-4),accountId:preferred.id});
             return json(response,200,{connected:true,accounts,selectedAccountId:preferred.id,keyLastFour:apiKey.slice(-4)});
+          }
+          if (url.pathname === "/api/mobile/auth/activity" && request.method === "GET") {
+            await mobileAuth.user(token);
+            try { return json(response,200,await mobileActivity.list(token)); }
+            catch(error) { return json(response,400,{error:errorMessage(error)}); }
+          }
+          if (url.pathname === "/api/mobile/auth/close/quote" && request.method === "POST") {
+            await mobileAuth.user(token);
+            try { return json(response,200,await mobileActivity.quoteClose(token,await body(request))); }
+            catch(error) { return json(response,400,{error:errorMessage(error)}); }
+          }
+          if (url.pathname === "/api/mobile/auth/close/confirm" && request.method === "POST") {
+            await mobileAuth.user(token);
+            const input=await body(request);
+            try { return json(response,200,await mobileActivity.confirmClose(token,String(input.ticketId??""))); }
+            catch(error) { return json(response,400,{error:errorMessage(error)}); }
           }
           if (url.pathname === "/api/mobile/auth/trade/quote" && request.method === "POST") {
             await mobileAuth.user(token);
