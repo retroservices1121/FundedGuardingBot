@@ -1,9 +1,10 @@
+import MarketChart from '../../components/market-chart';
 import { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams } from 'expo-router';
 import { useSession } from '../../../App';
-type Market={id:string;symbol:string;provider:string;maxLeverage?:number};
+type Market={id:string;symbol:string;coin:string;provider:string;maxLeverage?:number};
 type Ticket={id:string;symbol:string;side:string;riskUsd:number;size:number;expectedPrice:number;stopLossPrice:number;takeProfitPrice:number;estimatedNotional:number;estimatedFee?:number;leverage:number;expiresAt:number;platformRules?:{warnings:string[];estimatedMargin?:number}};
 const money=(v?:number)=>typeof v==='number'&&Number.isFinite(v)?new Intl.NumberFormat('en-US',{style:'currency',currency:'USD',maximumFractionDigits:2}).format(v):'Unavailable';
 export default function Trade(){
@@ -14,6 +15,9 @@ export default function Trade(){
  const pending=useRef(false),[submitted,setSubmitted]=useState(false);
  useEffect(()=>{let mounted=true;request('markets','GET',undefined,token).then(result=>{if(mounted)setMarkets(result.markets);}).catch(e=>{if(mounted)setError(e.message);});return()=>{mounted=false;};},[request,token]);
  useEffect(()=>{if(!ticket)return;const timer=setInterval(()=>setNow(Date.now()),1000);return()=>clearInterval(timer);},[ticket]);
+ // Navigation can select another market while this tab remains mounted.
+ // eslint-disable-next-line react-hooks/set-state-in-effect
+ useEffect(()=>{if(params.marketId){setMarketId(params.marketId);setTicket(null);setSearch('');setError('');}},[params.marketId]);
  const market=markets?.find(m=>m.id===marketId);
  async function review(){
   if(pending.current)return;pending.current=true;setBusy(true);setError('');setResult('');
@@ -44,10 +48,11 @@ export default function Trade(){
    <TextInput accessibilityLabel="Search markets" placeholder="Search markets" placeholderTextColor="#82968b" style={styles.input} value={search} onChangeText={setSearch} autoCorrect={false}/>
    {!markets&&<ActivityIndicator color="#2dcc98"/>}
    <Text style={styles.copy}>{market?`Selected: ${market.symbol} (${market.provider})`:'Choose a market'}</Text>
-   {(markets??[]).filter(m=>`${m.symbol} ${m.provider}`.toLowerCase().includes(search.toLowerCase())).slice(0,8).map(m=><Pressable key={m.id} accessibilityRole="button" onPress={()=>setMarketId(m.id)} style={[styles.market,m.id===marketId&&styles.selected]}><Text style={styles.value}>{m.symbol}</Text><Text style={styles.small}>{m.provider}{m.maxLeverage?` · Up to ${m.maxLeverage}x`:''}</Text></Pressable>)}
+   {market&&<MarketChart key={market.id} provider={market.provider} coin={market.coin}/> }
+   {(search||!market?markets??[]:[]).filter(m=>`${m.symbol} ${m.provider}`.toLowerCase().includes(search.toLowerCase())).slice(0,8).map(m=><Pressable key={m.id} accessibilityRole="button" onPress={()=>setMarketId(m.id)} style={[styles.market,m.id===marketId&&styles.selected]}><Text style={styles.value}>{m.symbol}</Text><Text style={styles.small}>{m.provider}{m.maxLeverage?` · Up to ${m.maxLeverage}x`:''}</Text></Pressable>)}
    <View style={styles.row}>{(['buy','sell'] as const).map(direction=><Pressable accessibilityRole="button" accessibilityState={{selected:side===direction}} key={direction} style={[styles.direction,side===direction&&styles.selected]} onPress={()=>setSide(direction)}><Text style={styles.value}>{direction==='buy'?'Long':'Short'}</Text></Pressable>)}</View>
    {([{label:'Risk at stop ($)',value:risk,set:setRisk,hint:'Amount you choose to risk before fees'},{label:'Leverage (x)',value:leverage,set:setLeverage,hint:'Enter a whole number, e.g. 5'},{label:'Stop distance (%)',value:stop,set:setStop,hint:'Distance from entry, e.g. 1'},{label:'Reward / risk',value:reward,set:setReward,hint:'Target multiple, e.g. 2'}]).map(field=><View key={field.label} style={styles.field}><Text style={styles.copy}>{field.label}</Text><TextInput accessibilityLabel={field.label} keyboardType="decimal-pad" value={field.value} onChangeText={field.set} style={styles.input} placeholder={field.hint} placeholderTextColor="#82968b"/><Text style={styles.small}>{field.hint}</Text></View>)}
-   <Text style={styles.small}>You choose your trade parameters. Personal guardrails are off. MyFundedPerps performs final account and trading-rule checks.</Text>
+   <Text style={styles.small}>You choose your trade parameters. Personal guardrails follow your choices in Settings. MyFundedPerps performs final account and trading-rule checks.</Text>
    <Pressable accessibilityRole="button" disabled={busy||!marketId||!risk||!leverage||!stop||!reward} style={[styles.button,(busy||!marketId||!risk||!leverage||!stop||!reward)&&styles.disabled]} onPress={()=>void review()}><Text style={styles.buttonText}>Review trade</Text></Pressable>
   </>}
   {busy&&<ActivityIndicator color="#2dcc98"/>}{!!error&&<Text accessibilityRole="alert" style={styles.error}>{error}</Text>}

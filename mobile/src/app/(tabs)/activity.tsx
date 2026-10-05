@@ -4,7 +4,7 @@ import { ActivityIndicator, Alert, AppState, Pressable, RefreshControl, ScrollVi
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useIsFocused } from 'expo-router/react-navigation';
 import { useSession } from '../../../App';
-type Position={id:string;symbol:string;coin:string;provider:string;side:'long'|'short';size:number;entry_price:number;leverage:number;markPrice?:number;estimatedCloseFee?:number;estimatedUnrealizedPnl?:number;realized_pnl?:number;exit_price?:number;closed_at?:number;fees?:number};
+type Position={id:string;market_id:string;symbol:string;coin:string;provider:string;side:'long'|'short';size:number;entry_price:number;leverage:number;markPrice?:number;estimatedCloseFee?:number;estimatedUnrealizedPnl?:number;realized_pnl?:number;exit_price?:number;closed_at?:number;fees?:number};
 type Data={accountId:string;open:Position[];closed:Position[];updatedAt:string;refreshSeconds:number};
 type Quote={id:string;symbol:string;percent:number;size?:number;originalSize:number;expectedPrice:number;estimatedFee?:number;expiresAt:number};
 const money=(v?:number)=>typeof v==='number'&&Number.isFinite(v)?new Intl.NumberFormat('en-US',{style:'currency',currency:'USD',maximumFractionDigits:2}).format(v):'Unavailable';
@@ -57,8 +57,7 @@ export default function Activity(){
   {!data&&busy&&<ActivityIndicator color="#2dcc98"/>}
   {data&&!positions.length&&<Text style={styles.copy}>{tab==='open'?'No open positions on this account.':'No closed positions returned for this account.'}</Text>}
   {positions.map(p=>{const mark=feed[`${p.provider?.toLowerCase()}|${p.coin?.toUpperCase()}`]??p.markPrice,pnl=tab==='closed'?p.realized_pnl:mark!==undefined?(mark-p.entry_price)*Math.abs(p.size)*(p.side==='long'?1:-1):p.estimatedUnrealizedPnl;return <View key={p.id} style={styles.card}>
-   <View style={styles.row}><Text style={styles.symbol}>{p.symbol??p.coin}</Text><Text style={styles.copy}>{p.side.toUpperCase()} · {p.leverage}x</Text></View>
-   <Text style={[styles.pnl,{color:pnl===undefined?'#a9bbb2':pnl>=0?'#71e6b8':'#ff9c9c'}]}>{money(pnl)}</Text>
+   <Pressable accessibilityRole="button" accessibilityLabel={`Open ${p.symbol??p.coin} market chart`} disabled={tab!=='open'} onPress={()=>router.push({pathname:'/trade',params:{marketId:p.market_id}})}><View style={styles.row}><Text style={styles.symbol}>{p.symbol??p.coin}</Text><Text style={styles.copy}>{p.side.toUpperCase()} · {p.leverage}x</Text></View>{tab==='open'&&<Text style={styles.green}>View market chart ↗</Text>}<Text style={[styles.pnl,{color:pnl===undefined?'#a9bbb2':pnl>=0?'#71e6b8':'#ff9c9c'}]}>{money(pnl)}</Text></Pressable>
    <Text style={styles.small}>{tab==='closed'?'MFP reported realized P&L':live?'Estimated P&L from live market prices':'Estimated P&L from last received price'}</Text>
    <View style={styles.row}><Text style={styles.copy}>Entry</Text><Text style={styles.value}>{money(p.entry_price)}</Text></View>
    <View style={styles.row}><Text style={styles.copy}>{tab==='open'?'Mark / mid':'Exit'}</Text><Text style={styles.value}>{money(tab==='open'?mark:p.exit_price)}</Text></View>
