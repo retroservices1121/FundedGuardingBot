@@ -1,3 +1,4 @@
+import AccountDashboard from './account-dashboard';
 import { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, Linking, Pressable, ScrollView, StyleSheet, Text, TextInput } from 'react-native';
 
@@ -35,6 +36,7 @@ export default function AccountOnboarding({ token, request }: Props) {
   return <ScrollView style={styles.scroll} keyboardShouldPersistTaps="handled" contentContainerStyle={styles.content}>
     <Text style={styles.heading}>{connection?.connected ? 'Choose your account' : 'Connect MyFundedPerps'}</Text>
     {connection?.connected ? <>
+      {connection.selectedAccountId && <AccountDashboard key={connection.selectedAccountId} token={token} accountId={connection.selectedAccountId} request={request} />}
       <Text style={styles.copy}>API key connected, ending in {connection.keyLastFour}. Select the active account you want to use.</Text>
       {!connection.accounts?.length && <Text style={styles.copy}>No active accounts are currently available. Refresh after your account becomes active.</Text>}
       {connection.accounts?.map(account => <Pressable key={account.id} accessibilityRole="button" accessibilityState={{selected:connection.selectedAccountId===account.id,disabled:busy}} disabled={busy} style={[styles.account,connection.selectedAccountId===account.id && styles.selected]} onPress={() => void act('select',account.id)}>

@@ -570,6 +570,17 @@ export function startMiniAppServer(config: Config, db: Database) {
             await mobileAuth.saveConnection(token,{environment,encryptedApiKey:secrets.encrypt(apiKey),keyLastFour:apiKey.slice(-4),accountId:preferred.id});
             return json(response,200,{connected:true,accounts,selectedAccountId:preferred.id,keyLastFour:apiKey.slice(-4)});
           }
+          if (url.pathname === "/api/mobile/auth/dashboard" && request.method === "GET") {
+            const connection = await mobileAuth.connection(token);
+            if (!connection) return json(response,400,{error:"Connect MyFundedPerps first."});
+            const client = new MfpClient(HOSTS[connection.environment as keyof typeof HOSTS],secrets.decrypt(connection.encrypted_api_key));
+            try {
+              const account = await client.getAccount(connection.selected_account_id);
+              if (!isActiveAccount(account)) return json(response,409,{error:"This account is no longer active. Select another account."});
+              const policy = await client.getTradingPolicy(account.id);
+              return json(response,200,{account,risk:accountRisk(account),rules:accountRuleProgress(account,policy),updatedAt:new Date().toISOString(),refreshSeconds:config.MINI_APP_REFRESH_SECONDS});
+            } catch { return json(response,502,{error:"Could not refresh account data. Please try again."}); }
+          }
           if (url.pathname === "/api/mobile/auth/connection" && request.method === "GET") {
             const connection = await mobileAuth.connection(token);
             if (!connection) return json(response,200,{connected:false});
