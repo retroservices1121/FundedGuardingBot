@@ -1,5 +1,6 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { createRemoteJWKSet, jwtVerify, type JWTPayload } from 'jose';
+import type { TradeTicket } from './types.js';
 import type { Database } from './db.js';
 
 export const GOOGLE_IOS_CLIENT_ID = '174585846381-7nrqvpr243ndbk91gst8mjrubhkmnbdk.apps.googleusercontent.com';
@@ -27,6 +28,11 @@ export class MobileAuth {
         environment TEXT NOT NULL CHECK(environment IN ('live','sandbox')),
         encrypted_api_key TEXT NOT NULL, key_last_four TEXT NOT NULL,
         selected_account_id TEXT NOT NULL, guardian_mode TEXT NOT NULL DEFAULT 'off'
+      );
+      CREATE TABLE IF NOT EXISTS mobile_trade_tickets (
+        id TEXT PRIMARY KEY, identity_id UUID NOT NULL REFERENCES mobile_identities(id) ON DELETE CASCADE,
+        payload JSONB NOT NULL, expires_at TIMESTAMPTZ NOT NULL,
+        submitted_at TIMESTAMPTZ, result JSONB
       );
       CREATE TABLE IF NOT EXISTS mobile_sessions (
         token_hash TEXT PRIMARY KEY, identity_id UUID NOT NULL REFERENCES mobile_identities(id) ON DELETE CASCADE,
@@ -99,6 +105,23 @@ export class MobileAuth {
   async disconnect(token: string) {
     const user = await this.user(token);
     await this.db.pool.query(`DELETE FROM mobile_connections WHERE identity_id=$1`, [user.id]);
+  }
+  async saveTicket(token: string, ticket: TradeTicket) {
+    const user = await this.user(token);
+    await this.db.pool.query(`INSERT INTO mobile_trade_tickets (id,identity_id,payload,expires_at) VALUES ($1,$2,$3,$4)`,[ticket.id,user.id,JSON.stringify(ticket),new Date(ticket.expiresAt)]);
+  }
+  async claimTicket(token: string, id: string): Promise<TradeTicket | undefined> {
+    const user = await this.user(token);
+    const result = await this.db.pool.query(`UPDATE mobile_trade_tickets SET submitted_at=NOW() WHERE id=$1 AND identity_id=$2 AND submitted_at IS NULL AND expires_at>NOW() RETURNING payload`,[id,user.id]);
+    return result.rows[0]?.payload;
+  }
+  async ticketResult(token: string, id: string) {
+    const user = await this.user(token);
+    const result = await this.db.pool.query(`SELECT result,submitted_at FROM mobile_trade_tickets WHERE id=$1 AND identity_id=$2`,[id,user.id]);
+    return result.rows[0];
+  }
+  async saveTicketResult(id: string, result: unknown) {
+    await this.db.pool.query(`UPDATE mobile_trade_tickets SET result=$2 WHERE id=$1`,[id,JSON.stringify(result)]);
   }
   async logout(token: string) { await this.db.pool.query(`DELETE FROM mobile_sessions WHERE token_hash=$1`, [hash(token)]); }
   async delete(token: string) {

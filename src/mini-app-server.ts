@@ -1,3 +1,4 @@
+import { MobileTrading } from "./mobile-trading.js";
 import { MobileAuth } from "./mobile-auth.js";
 import { randomUUID } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
@@ -60,6 +61,7 @@ function marketProvider(market: Market) {
 
 export function startMiniAppServer(config: Config, db: Database) {
   const mobileAuth = new MobileAuth(db);
+  const mobileTrading = new MobileTrading(mobileAuth, config);
   const mobileAuthReady = mobileAuth.migrate();
   mobileAuthReady.catch(() => console.error("Mobile authentication database setup failed."));
   const authRequests = new Map<string, { count: number; until: number }>();
@@ -569,6 +571,17 @@ export function startMiniAppServer(config: Config, db: Database) {
             const preferred = accounts[0]!;
             await mobileAuth.saveConnection(token,{environment,encryptedApiKey:secrets.encrypt(apiKey),keyLastFour:apiKey.slice(-4),accountId:preferred.id});
             return json(response,200,{connected:true,accounts,selectedAccountId:preferred.id,keyLastFour:apiKey.slice(-4)});
+          }
+          if (url.pathname === "/api/mobile/auth/trade/quote" && request.method === "POST") {
+            await mobileAuth.user(token);
+            try { return json(response,200,await mobileTrading.quote(token,await body(request))); }
+            catch(error) { return json(response,400,{error:errorMessage(error)}); }
+          }
+          if (url.pathname === "/api/mobile/auth/trade/confirm" && request.method === "POST") {
+            await mobileAuth.user(token);
+            const input = await body(request);
+            try { return json(response,200,await mobileTrading.confirm(token,String(input.ticketId??""))); }
+            catch(error) { return json(response,400,{error:errorMessage(error)}); }
           }
           if (url.pathname === "/api/mobile/auth/markets" && request.method === "GET") {
             await mobileAuth.user(token);

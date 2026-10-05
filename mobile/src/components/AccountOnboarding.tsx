@@ -44,7 +44,7 @@ export default function AccountOnboarding({ token, request }: Props) {
         <Text style={styles.copy}>{account.stage ?? account.status ?? 'Active'}{Number.isFinite(account.starting_balance) ? ` · $${account.starting_balance!.toLocaleString()}` : ''}</Text>
         {connection.selectedAccountId===account.id && <Text style={styles.link}>Selected</Text>}
       </Pressable>)}
-      <Text style={styles.copy}>Personal guardrails are optional and off by default. MyFundedPerps account rules still apply. Trading and custom guardrail controls are coming in the next native build.</Text>
+      <Text style={styles.copy}>Personal guardrails are optional and off by default. MyFundedPerps account rules still apply. Custom guardrail controls will be added in Settings.</Text>
       <Pressable disabled={busy} accessibilityRole="button" onPress={() => void act('refresh')}><Text style={styles.link}>Refresh accounts</Text></Pressable>
       <Pressable disabled={busy} accessibilityRole="button" onPress={() => Alert.alert('Disconnect MyFundedPerps?', 'This removes the saved API key from Guardian. Your positions remain on MyFundedPerps.',[{text:'Cancel',style:'cancel'},{text:'Disconnect',style:'destructive',onPress:()=>void act('disconnect')}])}><Text style={styles.remove}>Disconnect API key</Text></Pressable>
     </> : <>
