@@ -1,3 +1,4 @@
+import { MobileAuth } from "./mobile-auth.js";
 import { randomUUID } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { readFile } from "node:fs/promises";
@@ -58,6 +59,10 @@ function marketProvider(market: Market) {
 }
 
 export function startMiniAppServer(config: Config, db: Database) {
+  const mobileAuth = new MobileAuth(db);
+  const mobileAuthReady = mobileAuth.migrate();
+  mobileAuthReady.catch(() => console.error("Mobile authentication database setup failed."));
+  const authRequests = new Map<string, { count: number; until: number }>();
   const secrets = new SecretBox(config.ENCRYPTION_KEY);
   const publicRoot = path.join(process.cwd(), "public", "miniapp");
 
@@ -533,6 +538,29 @@ export function startMiniAppServer(config: Config, db: Database) {
   const server = createServer(async (request, response) => {
     const url = new URL(request.url ?? "/", "http://localhost");
     try {
+      if (url.pathname.startsWith("/api/mobile/auth/")) {
+        await mobileAuthReady;
+        const address = request.socket.remoteAddress ?? "unknown";
+        const now = Date.now();
+        for (const [key, value] of authRequests) if (value.until < now) authRequests.delete(key);
+        const limit = authRequests.get(address) ?? { count: 0, until: now + 60_000 };
+        limit.count++;
+        authRequests.set(address, limit);
+        if (limit.count > 60) return json(response, 429, { error: "Too many sign-in requests. Try again shortly." });
+        const token = request.headers.authorization?.replace(/^Bearer /, "") ?? "";
+        try {
+          if (url.pathname === "/api/mobile/auth/challenge" && request.method === "POST") return json(response, 200, { nonce: await mobileAuth.challenge() });
+          if (url.pathname === "/api/mobile/auth/login" && request.method === "POST") {
+            const input = await body(request);
+            if ((input.provider !== "apple" && input.provider !== "google") || typeof input.idToken !== "string" || input.idToken.length > 16000) return json(response, 400, { error: "Invalid sign-in request." });
+            return json(response, 200, await mobileAuth.login(input.provider, input.idToken, typeof input.nonce === "string" ? input.nonce : undefined));
+          }
+          if (url.pathname === "/api/mobile/auth/me" && request.method === "GET") return json(response, 200, { user: await mobileAuth.user(token) });
+          if (url.pathname === "/api/mobile/auth/logout" && request.method === "POST") { await mobileAuth.logout(token); return json(response, 200, { ok: true }); }
+          if (url.pathname === "/api/mobile/auth/account" && request.method === "DELETE") { await mobileAuth.delete(token); return json(response, 200, { ok: true }); }
+          return json(response, 404, { error: "Not found." });
+        } catch { return json(response, 401, { error: "Could not verify your session. Please sign in again." }); }
+      }
       if (url.pathname === "/health") return json(response, 200, { ok: true });
       if (url.pathname === "/") {
         response.writeHead(302, { Location: "/app" });

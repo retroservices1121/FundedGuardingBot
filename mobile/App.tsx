@@ -1,27 +1,119 @@
+import { useEffect, useRef, useState } from 'react';
+import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, View } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
-import { StyleSheet, Text, View } from 'react-native';
+import Constants from 'expo-constants';
+import * as Apple from 'expo-apple-authentication';
+import * as SecureStore from 'expo-secure-store';
+import { GoogleSignin, GoogleSigninButton, isSuccessResponse } from '@react-native-google-signin/google-signin';
 
-export default function App() {
-  return (
-    <View style={styles.container}>
-      <Text style={styles.label}>FUNDED GUARDIAN</Text>
-      <Text style={styles.title}>Your account.
-Less clutter.</Text>
-      <Text style={styles.description}>A simpler way to understand and manage your MyFundedPerps account.</Text>
-      <View style={styles.notice}>
-        <Text style={styles.noticeTitle}>Development preview</Text>
-        <Text style={styles.description}>Native Apple and Google sign-in, account connection and trading are being built. This preview does not connect to an account or send orders.</Text>
-      </View>
-      <StatusBar style="light" />
-    </View>
-  );
+type User = { id: string; provider: string; email?: string };
+const key = 'guardian.native.session';
+const apiUrl = process.env.EXPO_PUBLIC_API_URL?.replace(/\/$/, '');
+GoogleSignin.configure({ iosClientId: Constants.expoConfig?.extra?.googleIosClientId });
+class SessionError extends Error {}
+async function request(path: string, method = 'GET', data?: unknown, token?: string) {
+  if (!apiUrl || !apiUrl.startsWith('https://')) throw new Error('The app server is not configured yet.');
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 15000);
+  try {
+    const response = await fetch(`${apiUrl}/api/mobile/auth/${path}`, { method, signal: controller.signal,
+      headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+      ...(data ? { body: JSON.stringify(data) } : {}) });
+    const result = await response.json();
+    if (!response.ok) {
+      if (response.status === 401) throw new SessionError(result.error);
+      throw new Error(result.error ?? 'Could not reach Guardian. Try again.');
+    }
+    return result;
+  } finally { clearTimeout(timer); }
 }
-
+export default function App() {
+  const [user, setUser] = useState<User | null>(null);
+  const [token, setToken] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [available, setAvailable] = useState(false);
+  const [error, setError] = useState('');
+  const pending = useRef(false);
+  async function hydrate() {
+    try {
+      const saved = await SecureStore.getItemAsync(key);
+      if (saved) {
+        setToken(saved);
+        const result = await request('me', 'GET', undefined, saved);
+        setUser(result.user);
+      }
+    } catch (e) {
+      if (e instanceof SessionError) { await SecureStore.deleteItemAsync(key); setToken(null); }
+      setError(e instanceof Error ? e.message : 'Could not restore your session.');
+    } finally { setLoading(false); }
+  }
+  // Session hydration resolves asynchronously before updating screen state.
+  // eslint-disable-next-line react-hooks/set-state-in-effect
+  useEffect(() => { void hydrate(); void Apple.isAvailableAsync().then(setAvailable).catch(() => setAvailable(false)); }, []);
+  async function login(provider: 'apple' | 'google') {
+    if (pending.current) return;
+    pending.current = true; setBusy(true); setError('');
+    try {
+      let idToken: string | null = null;
+      let nonce: string | undefined;
+      if (provider === 'apple') {
+        const challenge = await request('challenge', 'POST');
+        nonce = challenge.nonce;
+        const credential = await Apple.signInAsync({ nonce, requestedScopes: [Apple.AppleAuthenticationScope.EMAIL] });
+        idToken = credential.identityToken;
+      } else {
+        const result = await GoogleSignin.signIn();
+        if (!isSuccessResponse(result)) return;
+        idToken = result.data.idToken;
+      }
+      if (!idToken) throw new Error('No sign-in token received. Please try again.');
+      const result = await request('login', 'POST', { provider, idToken, nonce });
+      await SecureStore.setItemAsync(key, result.token);
+      setToken(result.token); setUser(result.user);
+    } catch (e) {
+      if ((e as { code?: string }).code !== 'ERR_REQUEST_CANCELED') setError(e instanceof Error ? e.message : 'Sign-in failed. Please try again.');
+    } finally { pending.current = false; setBusy(false); }
+  }
+  async function leave(remove = false) {
+    if (!token || pending.current) return;
+    pending.current = true; setBusy(true); setError('');
+    try {
+      await request(remove ? 'account' : 'logout', remove ? 'DELETE' : 'POST', undefined, token);
+      await SecureStore.deleteItemAsync(key);
+      setToken(null); setUser(null);
+      void GoogleSignin.signOut().catch(() => {});
+    } catch (e) { setError(e instanceof Error ? e.message : 'Please try again.'); }
+    finally { pending.current = false; setBusy(false); }
+  }
+  return <View style={styles.container}>
+    <StatusBar style="light" />
+    <Text style={styles.label}>FUNDED GUARDIAN</Text>
+    <Text style={styles.title}>{user ? 'Welcome to Guardian.' : 'Your account.\nLess clutter.'}</Text>
+    <Text style={styles.description}>{user ? `Signed in with ${user.provider === 'apple' ? 'Apple' : 'Google'}.` : 'A simpler way to understand and manage your MyFundedPerps account.'}</Text>
+    {loading ? <ActivityIndicator color="#2dcc98" accessibilityLabel="Restoring session" /> : user ? <View style={styles.notice}>
+      <Text style={styles.noticeTitle}>Your Guardian account is ready</Text>
+      <Text style={styles.description}>MyFundedPerps account connection is the next step. Trading is not available in this native preview yet.</Text>
+      <Pressable disabled={busy} accessibilityRole="button" onPress={() => void leave()}><Text style={styles.link}>Sign out</Text></Pressable>
+      <Pressable disabled={busy} accessibilityRole="button" onPress={() => Alert.alert('Delete Guardian account?', 'This deletes your native Guardian login and sessions. It does not delete your MyFundedPerps account.', [{ text: 'Cancel', style: 'cancel' }, { text: 'Delete', style: 'destructive', onPress: () => void leave(true) }])}><Text style={styles.delete}>Delete Guardian account</Text></Pressable>
+    </View> : token ? <Pressable accessibilityRole="button" onPress={() => { setLoading(true); setError(''); void hydrate(); }}><Text style={styles.link}>Retry session connection</Text></Pressable> : <View style={styles.buttons} pointerEvents={busy ? 'none' : 'auto'}>
+      {available && <Apple.AppleAuthenticationButton buttonType={Apple.AppleAuthenticationButtonType.CONTINUE} buttonStyle={Apple.AppleAuthenticationButtonStyle.WHITE} cornerRadius={8} style={styles.apple} onPress={() => void login('apple')} />}
+      <GoogleSigninButton size={GoogleSigninButton.Size.Wide} color={GoogleSigninButton.Color.Light} disabled={busy || !apiUrl} style={styles.google} onPress={() => void login('google')} />
+      {!apiUrl && <Text style={styles.description}>Server configuration is needed before you can sign in.</Text>}
+    </View>}
+    {busy && <ActivityIndicator color="#2dcc98" />}
+    {!!error && <Text accessibilityRole="alert" style={styles.delete}>{error}</Text>}
+    <Text style={styles.footnote}>Your Apple or Google login creates your Guardian profile. Your MyFundedPerps API key is connected separately.</Text>
+  </View>;
+}
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#07120e', justifyContent: 'center', padding: 28, gap: 20 },
   label: { color: '#2dcc98', fontWeight: '700', letterSpacing: 3, fontSize: 13 },
-  title: { color: '#f4f8f5', fontSize: 42, fontWeight: '700' },
+  title: { color: '#f4f8f5', fontSize: 40, fontWeight: '700' },
   description: { color: '#a9bbb2', fontSize: 17, lineHeight: 26 },
-  notice: { backgroundColor: '#12261c', borderRadius: 20, padding: 20, gap: 12, marginTop: 20 },
+  notice: { backgroundColor: '#12261c', borderRadius: 20, padding: 20, gap: 16 },
   noticeTitle: { color: '#f4f8f5', fontSize: 18, fontWeight: '600' },
+  buttons: { gap: 12 }, apple: { width: '100%', height: 48 }, google: { width: '100%', height: 48 },
+  link: { color: '#2dcc98', fontSize: 17, paddingVertical: 10 }, delete: { color: '#ff9c9c', fontSize: 15, paddingVertical: 8 },
+  footnote: { color: '#82968b', fontSize: 13, lineHeight: 20 },
 });
