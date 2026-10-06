@@ -1,3 +1,4 @@
+import {MobilePush} from './mobile-push.js';
 import { parseGuards } from "./mobile-guards.js";
 import { MobileActivity } from "./mobile-activity.js";
 import { MobileTrading } from "./mobile-trading.js";
@@ -65,7 +66,8 @@ export function startMiniAppServer(config: Config, db: Database) {
   const mobileAuth = new MobileAuth(db);
   const mobileActivity = new MobileActivity(mobileAuth, config);
   const mobileTrading = new MobileTrading(mobileAuth, config);
-  const mobileAuthReady = mobileAuth.migrate();
+  const mobilePush=new MobilePush(db);
+  const mobileAuthReady = mobileAuth.migrate().then(async()=>{await mobilePush.migrate();mobilePush.start();});
   mobileAuthReady.catch(() => console.error("Mobile authentication database setup failed."));
   const authRequests = new Map<string, { count: number; until: number }>();
   const secrets = new SecretBox(config.ENCRYPTION_KEY);
@@ -585,6 +587,12 @@ export function startMiniAppServer(config: Config, db: Database) {
             if(request.method==='GET')return json(response,200,connection.personal_guards??{mode:'off'});
             if(request.method==='POST'){const input=await body(request);const guards=parseGuards({...connection.personal_guards,...input});await mobileAuth.saveGuards(token,guards);return json(response,200,guards);}
           }
+          if(url.pathname==='/api/mobile/auth/notifications'){
+            const user=await mobileAuth.user(token);
+            if(request.method==='GET')return json(response,200,await mobilePush.preferences(user.id,url.searchParams.get('pushToken')??undefined));
+            if(request.method==='POST')return json(response,200,await mobilePush.register(user.id,await body(request)));
+            if(request.method==='DELETE'){const input=await body(request);await mobilePush.disable(user.id,typeof input.pushToken==='string'?input.pushToken:undefined);return json(response,200,{ok:true});}
+          }
           if (url.pathname === "/api/mobile/auth/pulse" && request.method === "GET") {
             await mobileAuth.user(token);
             return json(response,200,{items:await db.pulseItems(),updatedAt:new Date().toISOString()});
@@ -670,7 +678,7 @@ export function startMiniAppServer(config: Config, db: Database) {
           }
           if (url.pathname === "/api/mobile/auth/connection" && request.method === "DELETE") { await mobileAuth.disconnect(token); return json(response,200,{ok:true}); }
           if (url.pathname === "/api/mobile/auth/me" && request.method === "GET") return json(response, 200, { user: await mobileAuth.user(token) });
-          if (url.pathname === "/api/mobile/auth/logout" && request.method === "POST") { await mobileAuth.logout(token); return json(response, 200, { ok: true }); }
+          if (url.pathname === "/api/mobile/auth/logout" && request.method === "POST") { await mobilePush.disable((await mobileAuth.user(token)).id); await mobileAuth.logout(token); return json(response, 200, { ok: true }); }
           if (url.pathname === "/api/mobile/auth/account" && request.method === "DELETE") { await mobileAuth.delete(token); return json(response, 200, { ok: true }); }
           return json(response, 404, { error: "Not found." });
         } catch { return json(response, 401, { error: "Could not verify your session. Please sign in again." }); }

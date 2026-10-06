@@ -141,3 +141,9 @@ The encryption master key must remain a deployment secret and must never be comm
 Telegram message deletion is best-effort. Before broad public launch, the recommended upgrade is a small HTTPS connection page using Telegram authentication so credentials never enter message history. Also add rate limiting, secret-free audit events, credential rotation support, database backups, and an external security review.
 
 The MyFundedPerps developer API is beta. Always validate contract changes in sandbox before deployment.
+
+### Native Pulse push notifications
+
+Pulse notifications are opt-in per iPhone in Settings. News, market moves and the daily digest have separate switches. The backend stores Expo push tokens against the authenticated native identity, checks delivery receipts, removes invalid devices and does not replay headlines published before opt-in. Signing out disables that identity's registered notifications. The digest uses 8 AM America/New_York; news is limited to one per 30 minutes and all alerts have a five-minute device cooldown. The current market-move producer must be enabled and receiving events for move notifications to fire. RSS failures can delay news or the digest.
+
+Version 1.0.2 adds expo-notifications and needs a new iOS binary. It cannot be delivered to the 1.0.1 binary through OTA. In `mobile`, run `npx eas-cli@latest credentials --platform ios`, select the production profile, and configure an Apple Push Notifications key for the same Apple developer team. Reuse a valid existing APNs key if available. Then run `npx eas-cli@latest build --platform ios --profile production --auto-submit`. Install the new TestFlight version, enable notification categories in Settings and accept the iOS permission prompt. Tapping an alert opens Pulse. Delivery requires backend availability, valid APNs credentials and iOS notification permission. If Expo enhanced push security is enabled, set EXPO_ACCESS_TOKEN on the backend only.

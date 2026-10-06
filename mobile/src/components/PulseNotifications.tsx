@@ -1,0 +1,16 @@
+import {useEffect,useState} from 'react';
+import {Linking,Pressable,Switch,Text,View} from 'react-native';
+import * as Notifications from 'expo-notifications';
+import * as SecureStore from 'expo-secure-store';
+import Constants from 'expo-constants';
+import {useSession} from '../../App';
+export default function PulseNotifications(){
+ const {request,token,user}=useSession();const [prefs,setPrefs]=useState({news:false,alerts:false,digest:false}),[busy,setBusy]=useState(false),[ready,setReady]=useState(false),[notice,setNotice]=useState('');const key=`guardian-push-${user.id}`;
+ useEffect(()=>{let active=true;SecureStore.getItemAsync(key).then(saved=>request(`notifications?pushToken=${encodeURIComponent(saved??'')}`,'GET',undefined,token)).then(p=>{if(active){setPrefs({news:p.news===true,alerts:p.alerts===true,digest:p.digest===true});setReady(true);}}).catch(()=>{if(active)setNotice('Could not load notification preferences. Try reopening Settings.');});return()=>{active=false;};},[request,token,key]);
+ async function save(){setBusy(true);setNotice('');try{if(!Object.values(prefs).some(Boolean)){const saved=await SecureStore.getItemAsync(key);if(saved)await request('notifications','DELETE',{pushToken:saved},token);setNotice('Notifications are off for this device.');return;}
+ let permission=await Notifications.getPermissionsAsync();if(!permission.granted)permission=await Notifications.requestPermissionsAsync();if(!permission.granted){setNotice('Allow notifications in iPhone Settings to enable Pulse alerts.');return;}
+ const projectId=Constants.expoConfig?.extra?.eas?.projectId;if(!projectId)throw new Error('Notification project is not configured.');const pushToken=(await Notifications.getExpoPushTokenAsync({projectId})).data;
+ await request('notifications','POST',{pushToken,...prefs},token);await SecureStore.setItemAsync(key,pushToken);setNotice('Pulse notifications saved for this device.');
+ }catch(e){setNotice(e instanceof Error?e.message:'Could not enable notifications.');}finally{setBusy(false);}}
+ return <View style={{gap:14,padding:18,borderRadius:16,backgroundColor:'#14271e'}}><Text style={{color:'#fff',fontSize:23,fontWeight:'700'}}>Pulse notifications</Text><Text style={{color:'#a9bbb2',lineHeight:22}}>Choose your alerts. News is limited to one every 30 minutes. The daily digest arrives around 8 AM Eastern.</Text>{(['alerts','news','digest'] as const).map(kind=><View key={kind} style={{flexDirection:'row',alignItems:'center',justifyContent:'space-between'}}><Text style={{color:'#fff',fontSize:16}}>{kind==='alerts'?'Market moves':kind==='news'?'News headlines':'Daily digest'}</Text><Switch accessibilityLabel={kind} disabled={!ready||busy} value={prefs[kind]} onValueChange={value=>setPrefs(p=>({...p,[kind]:value}))}/></View>)}<Pressable accessibilityRole="button" disabled={!ready||busy} onPress={()=>void save()} style={{padding:14,borderRadius:12,backgroundColor:'#24533e'}}><Text style={{color:'#2dcc98',fontWeight:'700'}}>{busy?'Saving…':'Save notifications'}</Text></Pressable>{!!notice&&<Text accessibilityRole="alert" style={{color:'#a9bbb2'}}>{notice}</Text>}<Pressable accessibilityRole="button" onPress={()=>void Linking.openSettings()}><Text style={{color:'#2dcc98'}}>Open iPhone notification settings</Text></Pressable></View>;
+}

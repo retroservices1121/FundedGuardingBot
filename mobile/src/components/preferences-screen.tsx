@@ -1,3 +1,4 @@
+import PulseNotifications from './PulseNotifications';
 import { Link } from 'expo-router';
 import { useIsFocused } from 'expo-router/react-navigation';
 import AccountOnboarding from './AccountOnboarding';
@@ -19,7 +20,7 @@ export default function Settings(){
  <View style={styles.row}>{amounts.map((amount,i)=><TextInput key={i} accessibilityLabel={`Quick risk amount ${i+1}`} editable={ready&&!saving} value={amount} onChangeText={text=>setAmounts(current=>current.map((v,j)=>j===i?text:v))} keyboardType="decimal-pad" style={[styles.input,{flex:1,minWidth:0}]} />)}</View>
  <Pressable accessibilityRole="button" disabled={!ready||saving} style={styles.option} onPress={()=>quickEnabled?setQuickEnabled(false):Alert.alert('Enable immediate trading?','A quick-risk tap sends an order without another confirmation. Your enforced guardrails still apply. Warn mode displays warnings after submission.',[{text:'Cancel',style:'cancel'},{text:'Enable',onPress:()=>setQuickEnabled(true)}])}><Text style={styles.value}>{quickEnabled?'Enabled · tap to turn off':'Off · tap to enable'}</Text></Pressable>
  <Pressable accessibilityRole="button" disabled={!ready||saving||loading} onPress={()=>void save()} style={styles.option}><Text style={styles.link}>{loading?'Loading…':saving?'Saving…':'Save trading preferences'}</Text></Pressable>{!!notice&&<Text accessibilityRole="alert" style={styles.copy}>{notice}</Text>}
- <AccountOnboarding token={token} request={request} showDashboard={false}/><Text style={styles.copy}>Signed in with {user.provider==='apple'?'Apple':'Google'}.</Text>
+ <PulseNotifications/><AccountOnboarding token={token} request={request} showDashboard={false}/><Text style={styles.copy}>Signed in with {user.provider==='apple'?'Apple':'Google'}.</Text>
  <Pressable accessibilityRole="button" disabled={busy} onPress={()=>void leave()}><Text style={styles.link}>Sign out</Text></Pressable>
  <Pressable accessibilityRole="button" disabled={busy} onPress={()=>Alert.alert('Delete Guardian account?','This removes your native login, saved API key and sessions. It does not close your MyFundedPerps positions.',[{text:'Cancel',style:'cancel'},{text:'Delete',style:'destructive',onPress:()=>void leave(true)}])}><Text style={styles.error}>Delete Guardian account</Text></Pressable>{!!error&&<Text style={styles.error}>{error}</Text>}
  </ScrollView>;
