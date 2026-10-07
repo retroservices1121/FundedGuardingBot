@@ -9,4 +9,4 @@ jobs:
     params:
       platform: ios
       channel: production
-      message: "Update login headline to Your Account. On the go."
+      message: "Fix trade input defaults and review validation"
