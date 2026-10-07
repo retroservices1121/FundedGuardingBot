@@ -1,11 +1,11 @@
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import LoginCandles from './src/components/LoginCandles';
 import { StatusBar } from 'expo-status-bar';
 import Constants from 'expo-constants';
 import * as Apple from 'expo-apple-authentication';
 import * as SecureStore from 'expo-secure-store';
-import { GoogleSignin, GoogleSigninButton, isSuccessResponse } from '@react-native-google-signin/google-signin';
+import { GoogleSignin, isSuccessResponse } from '@react-native-google-signin/google-signin';
 
 type User = { id: string; provider: string; email?: string };
 const key = 'guardian.native.session';
@@ -95,12 +95,14 @@ export default function App({ children }: { children: ReactNode }) {
     <LoginCandles />
     <StatusBar style="light" />
     <ScrollView contentContainerStyle={styles.loginContent} showsVerticalScrollIndicator={false}>
-    <Text style={styles.label}>FUNDED GUARDIAN</Text>
+    <View style={styles.loginBrand}><Image source={require("./assets/icon.png")} accessibilityLabel="Funded Guardian logo" style={styles.loginLogo}/><Text style={styles.label}>FUNDED GUARDIAN</Text></View>
     {!user && <Text style={styles.title}>Your account.{'\n'}Less clutter.</Text>}
     <Text style={styles.description}>{user ? `Signed in with ${user.provider === 'apple' ? 'Apple' : 'Google'}.` : 'A simpler way to understand and manage your MyFundedPerps account.'}</Text>
     {loading ? <ActivityIndicator color="#2dcc98" accessibilityLabel="Restoring session" /> : token ? <Pressable accessibilityRole="button" onPress={() => { setLoading(true); setError(''); void hydrate(); }}><Text style={styles.link}>Retry session connection</Text></Pressable> : <View style={styles.buttons} pointerEvents={busy ? 'none' : 'auto'}>
       {available && <Apple.AppleAuthenticationButton buttonType={Apple.AppleAuthenticationButtonType.CONTINUE} buttonStyle={Apple.AppleAuthenticationButtonStyle.WHITE} cornerRadius={14} style={styles.apple} onPress={() => void login('apple')} />}
-      <View style={styles.googleFrame}><GoogleSigninButton size={GoogleSigninButton.Size.Wide} color={GoogleSigninButton.Color.Light} disabled={busy || !apiUrl} style={styles.google} onPress={() => void login('google')} /></View>
+      <Pressable accessibilityRole="button" accessibilityLabel="Continue with Google" accessibilityState={{disabled:busy || !apiUrl}} disabled={busy || !apiUrl} onPress={() => void login('google')} style={({pressed})=>[styles.googleButton,{opacity:busy || !apiUrl ? 0.5 : pressed ? 0.85 : 1}]}>
+        <Image source={require('./assets/google-g.png')} style={styles.googleIcon}/><Text style={styles.googleLabel}>Continue with Google</Text>
+      </Pressable>
       {!apiUrl && <Text style={styles.description}>Server configuration is needed before you can sign in.</Text>}
     </View>}
     {busy && <ActivityIndicator color="#2dcc98" />}
@@ -112,14 +114,17 @@ export default function App({ children }: { children: ReactNode }) {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#07120e' },
   loginContent: { flexGrow: 1, justifyContent: 'center', paddingHorizontal: 28, paddingVertical: 64, gap: 20 },
+  loginBrand: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  loginLogo: { width: 52, height: 52, borderRadius: 12 },
   label: { color: '#2dcc98', fontWeight: '700', letterSpacing: 3, fontSize: 13 },
   title: { color: '#f4f8f5', fontSize: 40, fontWeight: '700' },
   description: { color: '#a9bbb2', fontSize: 17, lineHeight: 26 },
   notice: { flexShrink: 1, backgroundColor: '#12261c', borderRadius: 20, padding: 20, gap: 16 },
   noticeTitle: { color: '#f4f8f5', fontSize: 18, fontWeight: '600' },
   buttons: { gap: 14, marginTop: 8 }, apple: { width: '100%', height: 56 },
-  googleFrame: { height: 56, borderRadius: 14, overflow: 'hidden', backgroundColor: '#fff', justifyContent: 'center' },
-  google: { width: '100%', height: 56 },
+  googleButton: { minHeight: 56, borderRadius: 14, backgroundColor: '#fff', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 12, padding: 14 },
+  googleIcon: { width: 22, height: 22, resizeMode: 'contain' },
+  googleLabel: { color: '#1f1f1f', fontSize: 19, fontWeight: '500', flexShrink: 1 },
   link: { color: '#2dcc98', fontSize: 17, paddingVertical: 10 }, delete: { color: '#ff9c9c', fontSize: 15, paddingVertical: 8 },
   footnote: { color: '#82968b', fontSize: 13, lineHeight: 20 },
 });
