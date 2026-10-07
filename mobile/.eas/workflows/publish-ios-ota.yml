@@ -9,4 +9,4 @@ jobs:
     params:
       platform: ios
       channel: production
-      message: "Add asset-specific leverage selector and compact trade form"
+      message: "Match TP/SL P&L preview to mini app"
