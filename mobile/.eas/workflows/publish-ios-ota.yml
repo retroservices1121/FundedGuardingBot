@@ -9,4 +9,4 @@ jobs:
     params:
       platform: ios
       channel: production
-      message: "Add chart pinch zoom and history navigation"
+      message: "Gesture-only chart pinch zoom, swipe and double-tap reset"
