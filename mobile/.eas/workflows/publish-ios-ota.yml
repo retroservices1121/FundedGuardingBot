@@ -9,4 +9,4 @@ jobs:
     params:
       platform: ios
       channel: production
-      message: "Clean up custom risk input and Apply button"
+      message: "Add chart pinch zoom and history navigation"
