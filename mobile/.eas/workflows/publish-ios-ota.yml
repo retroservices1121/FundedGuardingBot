@@ -9,4 +9,4 @@ jobs:
     params:
       platform: ios
       channel: production
-      message: "Improve live chart price updates and freshness status"
+      message: "Preserve notification choices and repair device registration"
