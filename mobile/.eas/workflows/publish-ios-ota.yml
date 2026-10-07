@@ -9,4 +9,4 @@ jobs:
     params:
       platform: ios
       channel: production
-      message: "Fix trade input defaults and review validation"
+      message: "Add asset-specific leverage selector and compact trade form"
