@@ -494,6 +494,11 @@ export function startMiniAppServer(config: Config, db: Database) {
   }
 
   const staticFiles: Record<string, { file: string; type: string }> = {
+    "/privacy": { file: "privacy.html", type: "text/html; charset=utf-8" },
+    "/privacy/": { file: "privacy.html", type: "text/html; charset=utf-8" },
+    "/support": { file: "support.html", type: "text/html; charset=utf-8" },
+    "/support/": { file: "support.html", type: "text/html; charset=utf-8" },
+    "/legal.css": { file: "legal.css", type: "text/css; charset=utf-8" },
     "/app": { file: "index.html", type: "text/html; charset=utf-8" },
     "/app/": { file: "index.html", type: "text/html; charset=utf-8" },
     "/app/app.js": { file: "app.js", type: "text/javascript; charset=utf-8" },

@@ -3,7 +3,7 @@ import { Link } from 'expo-router';
 import { useIsFocused } from 'expo-router/react-navigation';
 import AccountOnboarding from './AccountOnboarding';
 import { useEffect, useState } from 'react';
-import { Alert, Pressable, ScrollView, Text, TextInput, View, StyleSheet } from 'react-native';
+import { Alert, Linking, Pressable, ScrollView, Text, TextInput, View, StyleSheet } from 'react-native';
 import { useSession } from '../../App';
 export default function Settings(){
  const focused=useIsFocused();const {user,token,request,busy,leave,error}=useSession();const [mode,setMode]=useState('off'),[max,setMax]=useState(''),[percent,setPercent]=useState(''),[notice,setNotice]=useState(''),[loading,setLoading]=useState(true),[saving,setSaving]=useState(false),[ready,setReady]=useState(false),[quickEnabled,setQuickEnabled]=useState(false),[amounts,setAmounts]=useState(['10','50','100']);
@@ -21,6 +21,7 @@ export default function Settings(){
  <Pressable accessibilityRole="button" disabled={!ready||saving} style={styles.option} onPress={()=>quickEnabled?setQuickEnabled(false):Alert.alert('Enable immediate trading?','A quick-risk tap sends an order without another confirmation. Your enforced guardrails still apply. Warn mode displays warnings after submission.',[{text:'Cancel',style:'cancel'},{text:'Enable',onPress:()=>setQuickEnabled(true)}])}><Text style={styles.value}>{quickEnabled?'Enabled · tap to turn off':'Off · tap to enable'}</Text></Pressable>
  <Pressable accessibilityRole="button" disabled={!ready||saving||loading} onPress={()=>void save()} style={styles.option}><Text style={styles.link}>{loading?'Loading…':saving?'Saving…':'Save trading preferences'}</Text></Pressable>{!!notice&&<Text accessibilityRole="alert" style={styles.copy}>{notice}</Text>}
  <PulseNotifications/><AccountOnboarding token={token} request={request} showDashboard={false}/><Text style={styles.copy}>Signed in with {user.provider==='apple'?'Apple':'Google'}.</Text>
+ <Text style={styles.heading}>Help & privacy</Text>{(['support','privacy'] as const).map(page=><Pressable key={page} accessibilityRole="link" style={styles.option} onPress={()=>void Linking.openURL(`https://fundedguardingbot-production.up.railway.app/${page}`).catch(()=>Alert.alert('Could not open page','Please try again when you have an internet connection.'))}><Text style={styles.link}>{page==='support'?'Support ↗':'Privacy Policy ↗'}</Text></Pressable>)}
  <Pressable accessibilityRole="button" disabled={busy} onPress={()=>void leave()}><Text style={styles.link}>Sign out</Text></Pressable>
  <Pressable accessibilityRole="button" disabled={busy} onPress={()=>Alert.alert('Delete Guardian account?','This removes your native login, saved API key and sessions. It does not close your MyFundedPerps positions.',[{text:'Cancel',style:'cancel'},{text:'Delete',style:'destructive',onPress:()=>void leave(true)}])}><Text style={styles.error}>Delete Guardian account</Text></Pressable>{!!error&&<Text style={styles.error}>{error}</Text>}
  </ScrollView>;
