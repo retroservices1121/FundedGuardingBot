@@ -1,0 +1,12 @@
+name: Publish Guardian iOS OTA
+on:
+  workflow_dispatch: {}
+jobs:
+  publish_ios:
+    name: Publish production iOS update
+    type: update
+    environment: production
+    params:
+      platform: ios
+      channel: production
+      message: "Update login headline to Your Account. On the go."
