@@ -9,4 +9,4 @@ jobs:
     params:
       platform: ios
       channel: production
-      message: "Gesture-only chart pinch zoom, swipe and double-tap reset"
+      message: "Improve live chart price updates and freshness status"
