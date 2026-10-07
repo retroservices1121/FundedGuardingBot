@@ -96,7 +96,7 @@ export default function App({ children }: { children: ReactNode }) {
     <StatusBar style="light" />
     <ScrollView contentContainerStyle={styles.loginContent} showsVerticalScrollIndicator={false}>
     <View style={styles.loginBrand}><Image source={require("./assets/icon.png")} accessibilityLabel="Funded Guardian logo" style={styles.loginLogo}/><Text style={styles.label}>FUNDED GUARDIAN</Text></View>
-    {!user && <Text style={styles.title}>Your trading.{'\n'}On the go.</Text>}
+    {!user && <Text style={styles.title}>Your Account.{'\n'}On the go.</Text>}
     <Text style={styles.description}>{user ? `Signed in with ${user.provider === 'apple' ? 'Apple' : 'Google'}.` : 'Your mobile companion for managing your MyFundedPerps account.'}</Text>
     {loading ? <ActivityIndicator color="#2dcc98" accessibilityLabel="Restoring session" /> : token ? <Pressable accessibilityRole="button" onPress={() => { setLoading(true); setError(''); void hydrate(); }}><Text style={styles.link}>Retry session connection</Text></Pressable> : <View style={styles.buttons} pointerEvents={busy ? 'none' : 'auto'}>
       {available && <Apple.AppleAuthenticationButton buttonType={Apple.AppleAuthenticationButtonType.CONTINUE} buttonStyle={Apple.AppleAuthenticationButtonStyle.WHITE} cornerRadius={14} style={styles.apple} onPress={() => void login('apple')} />}
