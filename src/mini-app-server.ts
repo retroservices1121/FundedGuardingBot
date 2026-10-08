@@ -1,3 +1,4 @@
+import { MobileRequestLimiter } from "./mobile-request-limiter.js";
 import {MobilePush} from './mobile-push.js';
 import { parseGuards } from "./mobile-guards.js";
 import { MobileActivity } from "./mobile-activity.js";
@@ -69,7 +70,7 @@ export function startMiniAppServer(config: Config, db: Database) {
   const mobilePush=new MobilePush(db);
   const mobileAuthReady = mobileAuth.migrate().then(async()=>{await mobilePush.migrate();mobilePush.start();});
   mobileAuthReady.catch(() => console.error("Mobile authentication database setup failed."));
-  const authRequests = new Map<string, { count: number; until: number }>();
+  const mobileRequestLimiter = new MobileRequestLimiter();
   const secrets = new SecretBox(config.ENCRYPTION_KEY);
   const publicRoot = path.join(process.cwd(), "public", "miniapp");
 
@@ -552,12 +553,11 @@ export function startMiniAppServer(config: Config, db: Database) {
           try { address = `mobile:${(await mobileAuth.user(request.headers.authorization.slice(7))).id}`; }
           catch { return json(response,401,{error:"Session expired. Please sign in again."}); }
         }
-        const now = Date.now();
-        for (const [key, value] of authRequests) if (value.until < now) authRequests.delete(key);
-        const limit = authRequests.get(address) ?? { count: 0, until: now + 60_000 };
-        limit.count++;
-        authRequests.set(address, limit);
-        if (limit.count > 60) return json(response, 429, { error: "Too many sign-in requests. Try again shortly." });
+        const limit = mobileRequestLimiter.check(address, url.pathname, request.method ?? "GET");
+        if (!limit.allowed) {
+          response.setHeader("Retry-After", String(limit.retryAfter));
+          return json(response, 429, { error: limit.error });
+        }
         const token = request.headers.authorization?.replace(/^Bearer /, "") ?? "";
         try {
           if (url.pathname === "/api/mobile/auth/challenge" && request.method === "POST") return json(response, 200, { nonce: await mobileAuth.challenge() });
