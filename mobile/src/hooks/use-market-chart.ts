@@ -1,11 +1,14 @@
+import {useSession} from '../../App';
+import {demoChart} from '../lib/demo-session';
 import {useEffect,useState} from 'react';
 import {AppState} from 'react-native';
 import {useIsFocused} from 'expo-router/react-navigation';
 import {Candle,mergeCandle,parseCandle,applyTick} from '../lib/chart-data';
 export function useMarketChart(provider?:string,coin?:string,interval='5m'){
- const focused=useIsFocused();const [data,setData]=useState<{bars:Candle[];price?:number;status:string;bid?:number;ask?:number;bidSize?:number;askSize?:number}>({bars:[],status:'Choose a market'});
+ const {demo}=useSession();const focused=useIsFocused();const [data,setData]=useState<{bars:Candle[];price?:number;status:string;bid?:number;ask?:number;bidSize?:number;askSize?:number}>({bars:[],status:'Choose a market'});
  useEffect(()=>{
   if(!focused||!provider||!coin)return;
+  if(demo){const timer=setTimeout(()=>setData(demoChart(provider,coin,interval)),0);return()=>clearTimeout(timer);}
   let stopped=false,socket:WebSocket|null=null,retry:ReturnType<typeof setTimeout>|undefined,flush:ReturnType<typeof setTimeout>|undefined,lastEvent=0,lastPrice: number|undefined,lastPriceAt=0,bars:Candle[]=[],price:number|undefined,bid:number|undefined,ask:number|undefined,bidSize:number|undefined,askSize:number|undefined;
   function update(status=lastEvent&&Date.now()-lastEvent<=30000?'Live':'Waiting for price'){if(stopped)return;setData({bars:[...bars],price,status,bid,ask,bidSize,askSize});}
   function connect(){if(stopped||AppState.currentState==='background')return;update('Connecting');socket=new WebSocket('wss://api-stream.myfundedperpetuals.com/v1/market-data');
@@ -20,5 +23,5 @@ export function useMarketChart(provider?:string,coin?:string,interval='5m'){
   const watchdog=setInterval(()=>{if(lastEvent&&Date.now()-lastEvent>30000&&AppState.currentState==='active')update('Price may be stale');},5000);
   connect();const listener=AppState.addEventListener('change',state=>{if(state==='active'){if(!socket)connect();}else{if(retry)clearTimeout(retry);if(socket){socket.onclose=null;socket.close();socket=null;}update('Paused');}});
   return()=>{stopped=true;listener.remove();clearInterval(watchdog);if(retry)clearTimeout(retry);if(flush)clearTimeout(flush);if(socket){socket.onclose=null;socket.close();}};
- },[provider,coin,interval,focused]);return data;
+ },[provider,coin,interval,focused,demo]);return data;
 }

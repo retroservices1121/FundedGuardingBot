@@ -1,3 +1,6 @@
+import {router} from 'expo-router';
+import {SafeAreaView} from 'react-native-safe-area-context';
+import {createDemoClient,DEMO_TOKEN,DEMO_USER} from './src/lib/demo-session';
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 import { ActivityIndicator, Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import LoginCandles from './src/components/LoginCandles';
@@ -13,6 +16,7 @@ const apiUrl = (process.env.EXPO_PUBLIC_API_URL ?? Constants.expoConfig?.extra?.
 GoogleSignin.configure({ iosClientId: Constants.expoConfig?.extra?.googleIosClientId });
 class SessionError extends Error {}
 async function request(path: string, method = 'GET', data?: unknown, token?: string) {
+  if (token === DEMO_TOKEN) throw new Error('Demo requests must stay on this device.');
   if (!apiUrl || !apiUrl.startsWith('https://')) throw new Error('The app server is not configured yet.');
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 15000);
@@ -28,7 +32,7 @@ async function request(path: string, method = 'GET', data?: unknown, token?: str
     return result;
   } finally { clearTimeout(timer); }
 }
-type Session = { token: string; user: User; request: typeof request; busy: boolean; leave: (remove?: boolean) => Promise<void>; error: string };
+type Session = { demo: boolean; token: string; user: User; request: typeof request; busy: boolean; leave: (remove?: boolean) => Promise<void>; error: string };
 const SessionContext = createContext<Session | null>(null);
 export function useSession() { const value = useContext(SessionContext); if (!value) throw new Error('Sign in first.'); return value; }
 export default function App({ children }: { children: ReactNode }) {
@@ -39,6 +43,9 @@ export default function App({ children }: { children: ReactNode }) {
   const [available, setAvailable] = useState(false);
   const [error, setError] = useState('');
   const pending = useRef(false);
+  const [demoClient] = useState(createDemoClient);
+  const demo = token === DEMO_TOKEN;
+  function enterDemo(){if(loading||busy)return;demoClient.reset();setError('');setToken(DEMO_TOKEN);setUser(DEMO_USER);}
   async function hydrate() {
     try {
       const saved = await SecureStore.getItemAsync(key);
@@ -80,6 +87,7 @@ export default function App({ children }: { children: ReactNode }) {
     } finally { pending.current = false; setBusy(false); }
   }
   async function leave(remove = false) {
+    if (demo){router.replace('/');setToken(null);setUser(null);setError('');return;}
     if (!token || pending.current) return;
     pending.current = true; setBusy(true); setError('');
     try {
@@ -90,7 +98,7 @@ export default function App({ children }: { children: ReactNode }) {
     } catch (e) { setError(e instanceof Error ? e.message : 'Please try again.'); }
     finally { pending.current = false; setBusy(false); }
   }
-  if (user && token && !loading) return <SessionContext.Provider value={{user,token,request,busy,leave,error}}><StatusBar style="light" />{children}</SessionContext.Provider>;
+  if (user && token && !loading) return <SessionContext.Provider value={{demo,user,token,request:demo?demoClient.request:request,busy,leave,error}}><StatusBar style="light" /><View style={{flex:1,backgroundColor:'#07120e'}}>{demo&&<SafeAreaView edges={['top']} style={{backgroundColor:'#173a2b'}}><View style={{paddingHorizontal:18,paddingVertical:8,flexDirection:'row',alignItems:'center',justifyContent:'space-between',gap:12}}><Text style={{color:'#f4f8f5',fontSize:12,flexShrink:1}}>DEMO · Sample data · No real orders</Text><Pressable accessibilityRole="button" accessibilityLabel="Exit demo" onPress={()=>void leave()} hitSlop={8} style={{padding:8}}><Text style={{color:'#2dcc98',fontWeight:'700'}}>Exit</Text></Pressable></View></SafeAreaView>}<View style={{flex:1}}>{children}</View></View></SessionContext.Provider>;
   return <View style={styles.container}>
     <LoginCandles />
     <StatusBar style="light" />
@@ -105,6 +113,7 @@ export default function App({ children }: { children: ReactNode }) {
       </Pressable>
       {!apiUrl && <Text style={styles.description}>Server configuration is needed before you can sign in.</Text>}
     </View>}
+    {!loading&&<Pressable accessibilityRole="button" disabled={busy} onPress={enterDemo} style={{padding:16,borderRadius:14,borderWidth:1,borderColor:'#32664d',alignItems:'center',gap:6}}><Text style={{color:'#2dcc98',fontSize:17,fontWeight:'700'}}>Explore demo</Text><Text style={{color:'#a9bbb2',fontSize:12}}>Sample account · No sign-in or API key needed</Text></Pressable>}
     {busy && <ActivityIndicator color="#2dcc98" />}
     {!!error && <Text accessibilityRole="alert" style={styles.delete}>{error}</Text>}
     <Text style={styles.footnote}>Your Apple or Google login creates your Guardian profile. Your MyFundedPerps API key is connected separately.</Text>

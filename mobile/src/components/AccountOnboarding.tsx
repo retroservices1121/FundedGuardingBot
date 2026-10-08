@@ -1,3 +1,4 @@
+import {DEMO_TOKEN} from '../lib/demo-session';
 import { Link, router } from 'expo-router';
 import AccountDashboard from './account-dashboard';
 import { useEffect, useRef, useState } from 'react';
@@ -12,6 +13,7 @@ export default function AccountOnboarding({ token, request,manage=true,showDashb
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const pending = useRef(false);
+  const demo=token===DEMO_TOKEN;
   useEffect(() => {
     let mounted = true;
     request('connection','GET',undefined,token).then(value => { if (mounted) setConnection(value); })
@@ -39,14 +41,14 @@ export default function AccountOnboarding({ token, request,manage=true,showDashb
     <Text style={styles.heading}>{connection?.connected ? 'Choose your account' : 'Connect MyFundedPerps'}</Text>
     {connection?.connected ? <>
       {showDashboard&&connection.selectedAccountId && <AccountDashboard key={connection.selectedAccountId} token={token} accountId={connection.selectedAccountId} request={request} />}
-      <Text style={styles.copy}>API key connected, ending in {connection.keyLastFour}. Select the active account you want to use.</Text>
+      <Text style={styles.copy}>{demo?'Sample account. No API key is connected; trade reviews are local demonstrations.':`API key connected, ending in ${connection.keyLastFour}. Select the active account you want to use.`}</Text>
       {!connection.accounts?.length && <Text style={styles.copy}>No active accounts are currently available. Refresh after your account becomes active.</Text>}
       {connection.accounts?.map(account => <Pressable key={account.id} accessibilityRole="button" accessibilityState={{selected:connection.selectedAccountId===account.id,disabled:busy}} disabled={busy} style={[styles.account,connection.selectedAccountId===account.id && styles.selected]} onPress={() => void act('select',account.id)}>
         <Text style={styles.name}>{account.name ?? account.id}</Text>
         <Text style={styles.copy}>{account.stage ?? account.status ?? 'Active'}{Number.isFinite(account.starting_balance) ? ` · $${account.starting_balance!.toLocaleString()}` : ''}</Text>
         {connection.selectedAccountId===account.id && <Text style={styles.link}>Selected</Text>}
       </Pressable>)}
-      {manage&&<>
+      {manage&&!demo&&<>
       <Text style={styles.copy}>Personal guardrails are optional and off by default. MyFundedPerps account rules still apply. Choose warnings or your own enforced limits in Settings.</Text>
       <Link href="/settings" style={styles.link}>Choose my guardrails</Link>
       <Pressable disabled={busy} accessibilityRole="button" onPress={() => void act('refresh')}><Text style={styles.link}>Refresh accounts</Text></Pressable>

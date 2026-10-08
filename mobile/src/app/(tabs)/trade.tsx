@@ -10,10 +10,10 @@ type Ticket={id:string;symbol:string;side:string;riskUsd:number;size:number;expe
 const money=(v?:number)=>typeof v==='number'&&Number.isFinite(v)?new Intl.NumberFormat('en-US',{style:'currency',currency:'USD',maximumFractionDigits:v!==0&&Math.abs(v)<1?8:2}).format(v):'Unavailable';
 export default function Trade(){
  const focused=useIsFocused();
- const {request,token}=useSession(),params=useLocalSearchParams<{marketId?:string}>();
- const [markets,setMarkets]=useState<Market[]|null>(null),[marketId,setMarketId]=useState(params.marketId??''),[search,setSearch]=useState(''),[side,setSide]=useState<'buy'|'sell'>('buy');
- const [selector,setSelector]=useState(false),[draftRisk,setDraftRisk]=useState('');
- const [risk,setRisk]=useState(''),[chosenLeverage,setLeverage]=useState('1'),[stop,setStop]=useState('1'),[reward,setReward]=useState('2');
+ const {request,token,demo}=useSession(),params=useLocalSearchParams<{marketId?:string}>();
+ const [markets,setMarkets]=useState<Market[]|null>(null),[marketId,setMarketId]=useState(params.marketId??(demo?'binance|BTCUSDT':'')),[search,setSearch]=useState(''),[side,setSide]=useState<'buy'|'sell'>('buy');
+ const [selector,setSelector]=useState(false),[draftRisk,setDraftRisk]=useState(demo?'50':'');
+ const [risk,setRisk]=useState(demo?'50':''),[chosenLeverage,setLeverage]=useState('1'),[stop,setStop]=useState('1'),[reward,setReward]=useState('2');
  const [ticket,setTicket]=useState<Ticket|null>(null),[accountName,setAccountName]=useState(''),[dryRun,setDryRun]=useState(false),[busy,setBusy]=useState(false),[error,setError]=useState(''),[result,setResult]=useState(''),[now,setNow]=useState(()=>Date.now());
  const [quickPrefs,setQuickPrefs]=useState<{quickTradeEnabled?:boolean;quickAmounts?:number[]}|null>(null),[quickUncertain,setQuickUncertain]=useState(false);
  const pending=useRef(false),[submitted,setSubmitted]=useState(false);
