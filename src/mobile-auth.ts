@@ -2,6 +2,7 @@ import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { createRemoteJWKSet, jwtVerify, type JWTPayload } from 'jose';
 import type { TradeTicket } from './types.js';
 import type { Database } from './db.js';
+import { reviewCredentials, verifyReviewPassword } from './review-login.js';
 
 export const GOOGLE_IOS_CLIENT_ID = '174585846381-7nrqvpr243ndbk91gst8mjrubhkmnbdk.apps.googleusercontent.com';
 const keys = {
@@ -39,6 +40,10 @@ export class MobileAuth {
         payload JSONB NOT NULL, expires_at TIMESTAMPTZ NOT NULL,
         submitted_at TIMESTAMPTZ, result JSONB
       );
+      CREATE TABLE IF NOT EXISTS mobile_email_login_attempts (
+        identity_hash TEXT PRIMARY KEY, attempts INTEGER NOT NULL, expires_at TIMESTAMPTZ NOT NULL
+      );
+      DELETE FROM mobile_email_login_attempts WHERE expires_at < NOW();
       CREATE TABLE IF NOT EXISTS mobile_sessions (
         token_hash TEXT PRIMARY KEY, identity_id UUID NOT NULL REFERENCES mobile_identities(id) ON DELETE CASCADE,
         expires_at TIMESTAMPTZ NOT NULL
@@ -87,9 +92,41 @@ export class MobileAuth {
       throw new Error('Could not verify sign-in. Please try again.');
     } finally { client.release(); }
   }
+  async loginEmail(email: string, password: string) {
+    const credentials = reviewCredentials();
+    const failure = 'Email or password is incorrect, or email access is unavailable.';
+    if (!credentials) throw new Error(failure);
+    // Persist a shared account throttle across processes and deploys.
+    const attempt = await this.db.pool.query(`INSERT INTO mobile_email_login_attempts (identity_hash,attempts,expires_at)
+      VALUES ($1,1,NOW()+INTERVAL '15 minutes') ON CONFLICT(identity_hash) DO UPDATE SET
+      attempts=CASE WHEN mobile_email_login_attempts.expires_at<=NOW() THEN 1 ELSE mobile_email_login_attempts.attempts+1 END,
+      expires_at=CASE WHEN mobile_email_login_attempts.expires_at<=NOW() THEN NOW()+INTERVAL '15 minutes' ELSE mobile_email_login_attempts.expires_at END
+      RETURNING attempts`, [hash(credentials.email)]);
+    if (attempt.rows[0].attempts > 10) throw new Error('Too many email sign-in attempts. Try again in 15 minutes.');
+    const valid = await verifyReviewPassword(password, credentials.passwordHash);
+    if (!valid || email.trim().toLowerCase() !== credentials.email) throw new Error(failure);
+    const client = await this.db.pool.connect();
+    const sessionToken = randomBytes(32).toString('base64url');
+    try {
+      await client.query('BEGIN');
+      const result = await client.query(`INSERT INTO mobile_identities (id,provider,subject,email) VALUES ($1,'email',$2,$3)
+        ON CONFLICT(provider,subject) DO UPDATE SET email=EXCLUDED.email RETURNING id,provider,email`,
+        [randomUUID(), hash(JSON.stringify([credentials.email, credentials.passwordHash])), credentials.email]);
+      const user = result.rows[0];
+      await client.query(`INSERT INTO mobile_sessions VALUES ($1,$2,NOW()+INTERVAL '30 days')`, [hash(sessionToken),user.id]);
+      await client.query(`DELETE FROM mobile_email_login_attempts WHERE identity_hash=$1`, [hash(credentials.email)]);
+      await client.query('COMMIT');
+      return { token: sessionToken, user };
+    } catch {
+      await client.query('ROLLBACK');
+      throw new Error('Could not sign in. Please try again.');
+    } finally { client.release(); }
+  }
   async user(token: string) {
-    const result = await this.db.pool.query(`SELECT i.id,i.provider,i.email FROM mobile_sessions s JOIN mobile_identities i ON i.id=s.identity_id WHERE s.token_hash=$1 AND s.expires_at>NOW()`, [hash(token)]);
-    if (!result.rows[0]) throw new Error('Session expired. Please sign in again.');
+    const result = await this.db.pool.query(`SELECT i.id,i.provider,i.email,i.subject FROM mobile_sessions s JOIN mobile_identities i ON i.id=s.identity_id WHERE s.token_hash=$1 AND s.expires_at>NOW()`, [hash(token)]);
+    const user = result.rows[0];
+    const credentials = user?.provider === 'email' ? reviewCredentials() : undefined;
+    if (!user || (user.provider === 'email' && (!credentials || user.email !== credentials.email || user.subject !== hash(JSON.stringify([credentials.email, credentials.passwordHash]))))) throw new Error('Session expired. Please sign in again.');
     return result.rows[0];
   }
   async connection(token: string) {

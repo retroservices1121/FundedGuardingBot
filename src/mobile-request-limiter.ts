@@ -6,7 +6,7 @@ export class MobileRequestLimiter {
 
   check(identity: string, pathname: string, method: string, now = Date.now()) {
     const bucket: Bucket =
-      pathname === "/api/mobile/auth/challenge" || pathname === "/api/mobile/auth/login"
+      pathname === "/api/mobile/auth/challenge" || pathname === "/api/mobile/auth/login" || pathname === "/api/mobile/auth/email-login"
         ? "sign-in"
         : method === "GET" || method === "HEAD" ? "read" : "write";
     for (const [key, value] of this.requests) {

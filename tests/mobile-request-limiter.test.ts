@@ -14,7 +14,7 @@ describe("mobile request limits", () => {
   it("keeps sign-in throttling shared across challenge and login", () => {
     const limiter = new MobileRequestLimiter();
     for (let i = 0; i < 60; i++) {
-      expect(limiter.check("ip:1", i % 2 ? "/api/mobile/auth/login" : "/api/mobile/auth/challenge", "POST", 0).allowed).toBe(true);
+      expect(limiter.check("ip:1", ["/api/mobile/auth/login","/api/mobile/auth/challenge","/api/mobile/auth/email-login"][i % 3]!, "POST", 0).allowed).toBe(true);
     }
     expect(limiter.check("ip:1", "/api/mobile/auth/login", "POST", 1000)).toMatchObject({
       allowed: false, retryAfter: 59, error: "Too many sign-in requests. Try again shortly.",
@@ -36,3 +36,4 @@ describe("mobile request limits", () => {
     });
   });
 });
+

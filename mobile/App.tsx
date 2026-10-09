@@ -2,7 +2,7 @@ import {router} from 'expo-router';
 import {SafeAreaView} from 'react-native-safe-area-context';
 import {createDemoClient,DEMO_TOKEN,DEMO_USER} from './src/lib/demo-session';
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
-import { ActivityIndicator, Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Image, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import LoginCandles from './src/components/LoginCandles';
 import { StatusBar } from 'expo-status-bar';
 import Constants from 'expo-constants';
@@ -42,6 +42,9 @@ export default function App({ children }: { children: ReactNode }) {
   const [busy, setBusy] = useState(false);
   const [available, setAvailable] = useState(false);
   const [error, setError] = useState('');
+  const [emailForm, setEmailForm] = useState(false);
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
   const pending = useRef(false);
   const [demoClient] = useState(createDemoClient);
   const demo = token === DEMO_TOKEN;
@@ -86,6 +89,16 @@ export default function App({ children }: { children: ReactNode }) {
       if ((e as { code?: string }).code !== 'ERR_REQUEST_CANCELED') setError(e instanceof Error ? e.message : 'Sign-in failed. Please try again.');
     } finally { pending.current = false; setBusy(false); }
   }
+  async function loginEmail() {
+    if (pending.current || !email.trim() || !password) return;
+    pending.current = true; setBusy(true); setError('');
+    try {
+      const result = await request('email-login', 'POST', { email: email.trim(), password });
+      await SecureStore.setItemAsync(key, result.token);
+      setPassword(''); setToken(result.token); setUser(result.user);
+    } catch (e) { setError(e instanceof Error ? e.message : 'Sign-in failed. Please try again.'); }
+    finally { pending.current = false; setBusy(false); }
+  }
   async function leave(remove = false) {
     if (demo){router.replace('/');setToken(null);setUser(null);setError('');return;}
     if (!token || pending.current) return;
@@ -102,25 +115,35 @@ export default function App({ children }: { children: ReactNode }) {
   return <View style={styles.container}>
     <LoginCandles />
     <StatusBar style="light" />
-    <ScrollView contentContainerStyle={styles.loginContent} showsVerticalScrollIndicator={false}>
+    <KeyboardAvoidingView style={{flex:1}} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+    <ScrollView contentContainerStyle={styles.loginContent} keyboardShouldPersistTaps="handled" keyboardDismissMode="interactive" showsVerticalScrollIndicator={false}>
     <View style={styles.loginBrand}><Image source={require("./assets/icon.png")} accessibilityLabel="Funded Guardian logo" style={styles.loginLogo}/><Text style={styles.label}>FUNDED GUARDIAN</Text></View>
     {!user && <Text style={styles.title}>Your Account.{'\n'}On the go.</Text>}
-    <Text style={styles.description}>{user ? `Signed in with ${user.provider === 'apple' ? 'Apple' : 'Google'}.` : 'Your mobile companion for managing your MyFundedPerps account.'}</Text>
+    <Text style={styles.description}>{user ? `Signed in with ${user.provider === 'apple' ? 'Apple' : user.provider === 'email' ? 'email' : 'Google'}.` : 'Your mobile companion for managing your MyFundedPerps account.'}</Text>
     {loading ? <ActivityIndicator color="#2dcc98" accessibilityLabel="Restoring session" /> : token ? <Pressable accessibilityRole="button" onPress={() => { setLoading(true); setError(''); void hydrate(); }}><Text style={styles.link}>Retry session connection</Text></Pressable> : <View style={styles.buttons} pointerEvents={busy ? 'none' : 'auto'}>
       {available && <Apple.AppleAuthenticationButton buttonType={Apple.AppleAuthenticationButtonType.CONTINUE} buttonStyle={Apple.AppleAuthenticationButtonStyle.WHITE} cornerRadius={14} style={styles.apple} onPress={() => void login('apple')} />}
       <Pressable accessibilityRole="button" accessibilityLabel="Continue with Google" accessibilityState={{disabled:busy || !apiUrl}} disabled={busy || !apiUrl} onPress={() => void login('google')} style={({pressed})=>[styles.googleButton,{opacity:busy || !apiUrl ? 0.5 : pressed ? 0.85 : 1}]}>
         <Image source={require('./assets/google-g.png')} style={styles.googleIcon}/><Text style={styles.googleLabel}>Continue with Google</Text>
       </Pressable>
+      <Pressable accessibilityRole="button" disabled={busy} onPress={()=>{setEmailForm(!emailForm);setError('');setPassword('');}} style={{paddingVertical:12,alignItems:'center'}}><Text style={styles.link}>{emailForm?'Close email sign-in':'Sign in with email'}</Text></Pressable>
+      {emailForm&&<View style={{gap:12}}>
+        <Text style={styles.footnote}>Use the email and password provided by Guardian.</Text>
+        <TextInput accessibilityLabel="Email" placeholder="Email" placeholderTextColor="#82968b" value={email} onChangeText={setEmail} autoCapitalize="none" autoCorrect={false} keyboardType="email-address" autoComplete="username" textContentType="username" maxLength={254} style={styles.emailInput}/>
+        <TextInput accessibilityLabel="Password" placeholder="Password" placeholderTextColor="#82968b" value={password} onChangeText={setPassword} secureTextEntry autoCapitalize="none" autoCorrect={false} autoComplete="current-password" textContentType="password" maxLength={256} returnKeyType="go" onSubmitEditing={()=>void loginEmail()} style={styles.emailInput}/>
+        <Pressable accessibilityRole="button" disabled={busy||!apiUrl||!email.trim()||!password} onPress={()=>void loginEmail()} style={{padding:16,borderRadius:14,alignItems:'center',backgroundColor:'#2dcc98',opacity:busy||!apiUrl||!email.trim()||!password?0.5:1}}><Text style={{color:'#07120e',fontSize:17,fontWeight:'700'}}>Sign in</Text></Pressable>
+      </View>}
       {!apiUrl && <Text style={styles.description}>Server configuration is needed before you can sign in.</Text>}
     </View>}
     {!loading&&<Pressable accessibilityRole="button" disabled={busy} onPress={enterDemo} style={{padding:16,borderRadius:14,borderWidth:1,borderColor:'#32664d',alignItems:'center',gap:6}}><Text style={{color:'#2dcc98',fontSize:17,fontWeight:'700'}}>Explore demo</Text><Text style={{color:'#a9bbb2',fontSize:12}}>Sample account · No sign-in or API key needed</Text></Pressable>}
     {busy && <ActivityIndicator color="#2dcc98" />}
     {!!error && <Text accessibilityRole="alert" style={styles.delete}>{error}</Text>}
-    <Text style={styles.footnote}>Your Apple or Google login creates your Guardian profile. Your MyFundedPerps API key is connected separately.</Text>
+    <Text style={styles.footnote}>Your login accesses your Guardian profile. Your MyFundedPerps API key is connected separately.</Text>
     </ScrollView>
+    </KeyboardAvoidingView>
   </View>;
 }
 const styles = StyleSheet.create({
+  emailInput: {backgroundColor:'#12261c',color:'#f4f8f5',padding:16,borderRadius:14,borderWidth:1,borderColor:'#32664d',fontSize:17},
   container: { flex: 1, backgroundColor: '#07120e' },
   loginContent: { flexGrow: 1, justifyContent: 'center', paddingHorizontal: 28, paddingVertical: 64, gap: 20 },
   loginBrand: { flexDirection: 'row', alignItems: 'center', gap: 12 },

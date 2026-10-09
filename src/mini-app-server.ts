@@ -566,6 +566,12 @@ export function startMiniAppServer(config: Config, db: Database) {
             if ((input.provider !== "apple" && input.provider !== "google") || typeof input.idToken !== "string" || input.idToken.length > 16000) return json(response, 400, { error: "Invalid sign-in request." });
             return json(response, 200, await mobileAuth.login(input.provider, input.idToken, typeof input.nonce === "string" ? input.nonce : undefined));
           }
+          if (url.pathname === "/api/mobile/auth/email-login" && request.method === "POST") {
+            const input = await body(request);
+            if (typeof input.email !== 'string' || input.email.length > 254 || typeof input.password !== 'string' || !input.password || input.password.length > 256) return json(response,400,{error:'Enter your email and password.'});
+            try { return json(response,200,await mobileAuth.loginEmail(input.email,input.password)); }
+            catch (error) { return json(response,401,{error:error instanceof Error ? error.message : 'Could not sign in.'}); }
+          }
           if (url.pathname === "/api/mobile/auth/connect" && request.method === "POST") {
             await mobileAuth.user(token);
             const input = await body(request);

@@ -1,31 +1,28 @@
-# TestFlight review access
+# App Review access
 
-The login screen includes **Explore demo**. Reviewers do not need a username,
-password, Apple/Google account, or MyFundedPerps API key to use it.
+Use the live email sign-in path for the next review. The sample-data Explore demo remains available, but does not replace the live access instructions.
 
-The persistent **DEMO · Sample data · No real orders** banner identifies the demo.
-The **Exit** button returns to the login screen.
+## Server activation
 
-## Suggested review notes
+Set these private Railway backend variables (never EXPO_PUBLIC variables):
 
-Launch Funded Guardian and tap **Explore demo** below the Apple/Google sign-in
-buttons. This opens a sample $25,000 challenge account. No sign-in credentials or
-API key are required for demo access.
+- `GUARDIAN_REVIEW_EMAIL`: the approved review login identifier.
+- `GUARDIAN_REVIEW_PASSWORD_HASH`: generated with `npx tsx scripts/hash-review-password.ts`, supplying the password through stdin. Do not store the plaintext password in source, the mobile bundle, logs, or this document.
 
-You can explore Home (account overview and limits), Markets (sample heatmap and
-search), Trade (interactive sample chart, leverage selection, risk sizing and
-dry-run order review), Activity (open/closed sample positions, TP/SL review and
-dry-run closing), Pulse (clearly marked sample content), and Settings/Learn.
-The sample trade card can also be shared and is marked as demo data.
+Email login is disabled until both variables are valid. No real mailbox or email verification is required. Removing either setting or changing the password hash invalidates existing email sessions. Preserve the same hash across deployments while review is ongoing. There is no public email registration or password reset flow. This is a provisioned account using normal session and account permissions.
 
-Demo data and trade validations are handled locally on the device. Demo mode
-does not submit real orders, connect an API key, or register for push notifications.
-Dry-run validations leave sample positions unchanged. Exit demo to access the
-normal Apple/Google sign-in flow. Real account features require a separately
-connected MyFundedPerps API key.
+## Beta App Review Information
 
-## Release notes
+Enable Sign-in required. Put the review email and password in the username and password fields. Enter the competition API key privately in the Notes field with these steps:
 
-Submit the new TestFlight build that embeds this feature rather than relying on
-an OTA update to the earlier build. EAS build success and upload do not establish
-Apple processing, Beta App Review approval or external tester availability.
+1. On the login screen, tap Sign in with email.
+2. Enter the supplied username and password and tap Sign in.
+3. Follow Connect MyFundedPerps and paste the supplied API key. The key determines the Live environment.
+4. Select the competition account.
+5. Home shows real account information; Markets provides live discovery; Trade supports trade review and confirmation; Activity supports position management and TP/SL; Pulse shows news and alerts.
+
+The account belongs to the developer and is provided for testing. Trading actions affect the competition account. State explicitly which actions the reviewer may perform. No API key is bundled in the app. Keep the review credentials and key valid throughout review and subsequent review cycles. Do not include them in What to Test or public metadata.
+
+## Release
+
+Deploy and activate the server first, verify valid and invalid credentials against the live endpoint, then build iOS from the commit containing email login. Verify the exact installed build and full API-key setup before submitting. Keep Apple/Google login and the secondary email option in the shipped app; deleting it is unnecessary. Future reviewers must retain working access even if this account is rotated or disabled between reviews.
