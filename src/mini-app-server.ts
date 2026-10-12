@@ -1,3 +1,4 @@
+import { createLandingApi } from "./landing.js";
 import { MobileRequestLimiter } from "./mobile-request-limiter.js";
 import {MobilePush} from './mobile-push.js';
 import { parseGuards } from "./mobile-guards.js";
@@ -64,6 +65,7 @@ function marketProvider(market: Market) {
 }
 
 export function startMiniAppServer(config: Config, db: Database) {
+  const landingApi = createLandingApi(db);
   const mobileAuth = new MobileAuth(db);
   const mobileActivity = new MobileActivity(mobileAuth, config);
   const mobileTrading = new MobileTrading(mobileAuth, config);
@@ -690,9 +692,18 @@ export function startMiniAppServer(config: Config, db: Database) {
         } catch { return json(response, 401, { error: "Could not verify your session. Please sign in again." }); }
       }
       if (url.pathname === "/health") return json(response, 200, { ok: true });
-      if (url.pathname === "/") {
-        response.writeHead(302, { Location: "/app" });
-        return void response.end();
+      if (url.pathname.startsWith("/api/landing/")) return void await landingApi(request, response, url.pathname);
+      if ((request.method === "GET" || request.method === "HEAD") && (url.pathname === "/" || /^\/landing\/(?:landing\.js|image-[a-f0-9]{16}\.(?:png|jpg))$/.test(url.pathname))) {
+        const file = url.pathname === "/" ? "index.html" : url.pathname.slice("/landing/".length);
+        const content = await readFile(path.join(process.cwd(), "public", "landing", file));
+        response.writeHead(200, {
+          "Content-Type": file.endsWith(".html") ? "text/html; charset=utf-8" : file.endsWith(".js") ? "text/javascript; charset=utf-8" : file.endsWith(".png") ? "image/png" : "image/jpeg",
+          "Cache-Control": file.startsWith("image-") ? "public, max-age=86400" : "no-cache",
+          "Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self';",
+          "X-Content-Type-Options": "nosniff",
+          "Referrer-Policy": "strict-origin-when-cross-origin",
+        });
+        return void response.end(request.method === "HEAD" ? undefined : content);
       }
       if (url.pathname === "/app/logo.png") {
         const logo = await readFile(path.join(process.cwd(), "assets", "funded-guardian-logo.png"));
