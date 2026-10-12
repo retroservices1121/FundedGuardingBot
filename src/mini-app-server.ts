@@ -1,3 +1,4 @@
+import { MobileAnalytics } from "./mobile-analytics.js";
 import { createLandingApi } from "./landing.js";
 import { MobileRequestLimiter } from "./mobile-request-limiter.js";
 import {MobilePush} from './mobile-push.js';
@@ -65,6 +66,7 @@ function marketProvider(market: Market) {
 }
 
 export function startMiniAppServer(config: Config, db: Database) {
+  const mobileAnalytics = new MobileAnalytics(db);
   const landingApi = createLandingApi(db);
   const mobileAuth = new MobileAuth(db);
   const mobileActivity = new MobileActivity(mobileAuth, config);
@@ -548,6 +550,16 @@ export function startMiniAppServer(config: Config, db: Database) {
   const server = createServer(async (request, response) => {
     const url = new URL(request.url ?? "/", "http://localhost");
     try {
+      if (url.pathname === "/api/mobile/launch" || url.pathname === "/api/admin/mobile/stats") {
+        await mobileAuthReady;
+        return void await mobileAnalytics.handle(request,response,url,body);
+      }
+      if (url.pathname === "/admin/mobile" || url.pathname === "/admin/mobile.js") {
+        const isScript=url.pathname.endsWith(".js");
+        const content=await readFile(path.join(process.cwd(),"public","admin",isScript?"mobile.js":"mobile.html"));
+        response.writeHead(200,{"Content-Type":isScript?"text/javascript; charset=utf-8":"text/html; charset=utf-8","Cache-Control":"no-store","X-Robots-Tag":"noindex, nofollow","Content-Security-Policy":"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'","X-Content-Type-Options":"nosniff"});
+        return void response.end(content);
+      }
       if (url.pathname.startsWith("/api/mobile/auth/")) {
         await mobileAuthReady;
         let address = request.socket.remoteAddress ?? "unknown";
@@ -562,6 +574,11 @@ export function startMiniAppServer(config: Config, db: Database) {
         }
         const token = request.headers.authorization?.replace(/^Bearer /, "") ?? "";
         try {
+          if (url.pathname === "/api/mobile/auth/analytics" && request.method === "POST") {
+            const user=await mobileAuth.user(token);
+            try { await mobileAnalytics.track(await body(request),user.id);return json(response,200,{ok:true}); }
+            catch { return json(response,400,{error:"Could not record launch."}); }
+          }
           if (url.pathname === "/api/mobile/auth/challenge" && request.method === "POST") return json(response, 200, { nonce: await mobileAuth.challenge() });
           if (url.pathname === "/api/mobile/auth/login" && request.method === "POST") {
             const input = await body(request);

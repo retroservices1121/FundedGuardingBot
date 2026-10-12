@@ -32,6 +32,21 @@ async function request(path: string, method = 'GET', data?: unknown, token?: str
     return result;
   } finally { clearTimeout(timer); }
 }
+// Installation IDs describe app launches, not App Store downloads or advertising identity.
+let launchTracking: Promise<{installId:string;platform:string;version:string}|undefined> | undefined;
+function trackLaunch() {
+  return launchTracking ??= (async()=>{
+    if(!apiUrl || !['ios','android'].includes(Platform.OS))return;
+    let installId=await SecureStore.getItemAsync('guardian.analytics.install');
+    if(!installId){installId=`launch_${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}_${Math.random().toString(36).slice(2)}`;await SecureStore.setItemAsync('guardian.analytics.install',installId);}
+    const payload={installId,platform:Platform.OS,version:Constants.expoConfig?.version??'unknown'};
+    const controller=new AbortController();const timer=setTimeout(()=>controller.abort(),8000);
+    try { await fetch(`${apiUrl}/api/mobile/launch`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload),signal:controller.signal}); }
+    catch { /* Analytics must never block app access. */ }
+    finally { clearTimeout(timer); }
+    return payload;
+  })().catch(()=>undefined);
+}
 type Session = { demo: boolean; token: string; user: User; request: typeof request; busy: boolean; leave: (remove?: boolean) => Promise<void>; error: string };
 const SessionContext = createContext<Session | null>(null);
 export function useSession() { const value = useContext(SessionContext); if (!value) throw new Error('Sign in first.'); return value; }
@@ -64,7 +79,8 @@ export default function App({ children }: { children: ReactNode }) {
   }
   // Session hydration resolves asynchronously before updating screen state.
   // eslint-disable-next-line react-hooks/set-state-in-effect
-  useEffect(() => { void hydrate(); void Apple.isAvailableAsync().then(setAvailable).catch(() => setAvailable(false)); }, []);
+  useEffect(() => { void trackLaunch(); void hydrate(); void Apple.isAvailableAsync().then(setAvailable).catch(() => setAvailable(false)); }, []);
+  useEffect(()=>{if(token && token!==DEMO_TOKEN)void trackLaunch().then(payload=>{if(payload)return request('analytics','POST',payload,token);}).catch(()=>undefined);},[token]);
   async function login(provider: 'apple' | 'google') {
     if (pending.current) return;
     pending.current = true; setBusy(true); setError('');
