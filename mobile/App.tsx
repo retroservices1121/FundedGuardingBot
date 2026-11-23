@@ -13,6 +13,7 @@ import { GoogleSignin, isSuccessResponse } from '@react-native-google-signin/goo
 import { isTradeWrite, type ConfirmRetry } from './src/lib/trade-write';
 import { createMobileRequest, SessionError } from './src/lib/mobile-request';
 import { useTradeWriteLock } from './src/hooks/use-trade-write-lock';
+import { TRADING_DISCLAIMER } from './src/lib/app-information';
 
 type User = { id: string; provider: string; email?: string };
 const key = 'guardian.native.session';
@@ -159,6 +160,7 @@ export default function App({ children }: { children: ReactNode }) {
     {busy && <ActivityIndicator color="#2dcc98" />}
     {!!error && <Text accessibilityRole="alert" style={styles.delete}>{error}</Text>}
     <Text style={styles.footnote}>Your login accesses your Guardian profile. Your MyFundedPerps API key is connected separately.</Text>
+    <Text style={styles.footnote}>{TRADING_DISCLAIMER}</Text>
     </ScrollView>
     </KeyboardAvoidingView>
   </View>;

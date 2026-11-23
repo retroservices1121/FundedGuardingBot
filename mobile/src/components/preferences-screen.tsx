@@ -3,8 +3,16 @@ import { Link } from 'expo-router';
 import { useIsFocused } from 'expo-router/react-navigation';
 import AccountOnboarding from './AccountOnboarding';
 import { useEffect, useRef, useState } from 'react';
-import { Alert, Pressable, ScrollView, Text, TextInput, View, StyleSheet } from 'react-native';
+import { Alert, Linking, Pressable, ScrollView, Text, TextInput, View, StyleSheet } from 'react-native';
 import { useSession } from '../../App';
+import { APP_PAGE_URLS, TRADING_DISCLAIMER } from '../lib/app-information';
+
+const informationLinks = [
+ {label:'Privacy Policy',url:APP_PAGE_URLS.privacy},
+ {label:'Terms of Use',url:APP_PAGE_URLS.terms},
+ {label:'Support',url:APP_PAGE_URLS.support},
+];
+
 export default function Settings(){
  const focused=useIsFocused();const {user,token,request,busy,leave,error,demo,setQuickTradeOff}=useSession();const [mode,setMode]=useState('off'),[max,setMax]=useState(''),[percent,setPercent]=useState(''),[notice,setNotice]=useState(''),[loading,setLoading]=useState(true),[saving,setSaving]=useState(false),[ready,setReady]=useState(false),[quickEnabled,setQuickEnabled]=useState(false),[amounts,setAmounts]=useState(['10','50','100']);
  const savingRef=useRef(false);
@@ -41,6 +49,10 @@ export default function Settings(){
  <PulseNotifications/><AccountOnboarding token={token} request={request} showDashboard={false}/><Text style={styles.copy}>{demo?'Demo session · Settings apply only to this demonstration.':`Signed in with ${user.provider==='apple'?'Apple':user.provider==='email'?'email':'Google'}.`}</Text>
  <Pressable accessibilityRole="button" disabled={busy} onPress={()=>void leave()}><Text style={styles.link}>{demo?'Exit demo':'Sign out'}</Text></Pressable>
  {!demo&&<Pressable accessibilityRole="button" disabled={busy} onPress={()=>Alert.alert('Delete Guardian account?','This removes your native login, saved API key and sessions. It does not close your MyFundedPerps positions.',[{text:'Cancel',style:'cancel'},{text:'Delete',style:'destructive',onPress:()=>void leave(true)}])}><Text style={styles.error}>Delete Guardian account</Text></Pressable>}{!!error&&<Text style={styles.error}>{error}</Text>}
+ <View>
+  {informationLinks.map(({label,url})=><Pressable key={url} accessibilityRole="link" onPress={()=>void Linking.openURL(url).catch(()=>Alert.alert('Could not open this page','Please try again.'))}><Text style={styles.link}>{label}</Text></Pressable>)}
+ </View>
+ <Text style={styles.small}>{TRADING_DISCLAIMER}</Text>
  </ScrollView>;
 }
 const styles=StyleSheet.create({page:{flex:1,backgroundColor:'#07120e'},content:{padding:24,gap:18,paddingBottom:50},heading:{color:'#fff',fontSize:25,fontWeight:'700'},copy:{color:'#a9bbb2',fontSize:16,lineHeight:24},small:{color:'#82968b',fontSize:13,lineHeight:20},link:{color:'#2dcc98',paddingVertical:12,fontSize:17},error:{color:'#ff9c9c',paddingVertical:12,fontSize:16},row:{flexDirection:'row',gap:8},option:{backgroundColor:'#14271e',borderRadius:12,padding:12},selected:{backgroundColor:'#24533e'},value:{color:'#fff'},input:{color:'#fff',backgroundColor:'#14271e',borderRadius:12,padding:16,fontSize:20}});
