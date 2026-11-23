@@ -146,6 +146,12 @@ export class MobileAuth {
     const result=await this.db.pool.query(`UPDATE mobile_connections SET personal_guards=$2,guardian_mode=$3 WHERE identity_id=$1`,[user.id,JSON.stringify(guards),(guards as {mode:string}).mode]);
     if(!result.rowCount)throw new Error('Connect MyFundedPerps first.');
   }
+  async disableQuickTrade(token:string) {
+    const user=await this.user(token);
+    const result=await this.db.pool.query(`UPDATE mobile_connections SET personal_guards=personal_guards || '{"quickTradeEnabled":false}'::jsonb WHERE identity_id=$1 RETURNING personal_guards`,[user.id]);
+    if(!result.rowCount)throw new MobileValidationError('Connect MyFundedPerps first.');
+    return result.rows[0].personal_guards;
+  }
   async selectAccount(token: string, id: string) {
     const user = await this.user(token);
     await this.db.pool.query(`UPDATE mobile_connections SET selected_account_id=$2 WHERE identity_id=$1`, [user.id,id]);
@@ -154,9 +160,10 @@ export class MobileAuth {
     const user = await this.user(token);
     await this.db.pool.query(`DELETE FROM mobile_connections WHERE identity_id=$1`, [user.id]);
   }
-  async saveTicket(token: string, ticket: TradeTicket) {
+  async saveTicket(token: string, ticket: TradeTicket, reuse = false) {
     const user = await this.user(token);
-    await this.db.pool.query(`INSERT INTO mobile_trade_tickets (id,identity_id,payload,expires_at) VALUES ($1,$2,$3,$4)`,[ticket.id,user.id,JSON.stringify(ticket),new Date(ticket.expiresAt)]);
+    const result = await this.db.pool.query(`INSERT INTO mobile_trade_tickets (id,identity_id,payload,expires_at) VALUES ($1,$2,$3,$4)${reuse ? ' ON CONFLICT (id) DO NOTHING' : ''}`,[ticket.id,user.id,JSON.stringify(ticket),new Date(ticket.expiresAt)]);
+    return result.rowCount !== 0;
   }
   async claimTicket(token: string, id: string): Promise<TradeTicket | undefined> {
     const user = await this.user(token);
@@ -165,7 +172,7 @@ export class MobileAuth {
   }
   async ticketResult(token: string, id: string) {
     const user = await this.user(token);
-    const result = await this.db.pool.query(`SELECT result,submitted_at FROM mobile_trade_tickets WHERE id=$1 AND identity_id=$2`,[id,user.id]);
+    const result = await this.db.pool.query(`SELECT payload,result,submitted_at FROM mobile_trade_tickets WHERE id=$1 AND identity_id=$2`,[id,user.id]);
     return result.rows[0];
   }
   async saveTicketResult(id: string, result: unknown) {

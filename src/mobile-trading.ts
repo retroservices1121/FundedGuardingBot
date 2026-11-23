@@ -1,14 +1,19 @@
 import { MobileValidationError, MobileWriteUncertainError } from './mobile-errors.js';
 import { guardWarnings } from "./mobile-guards.js";
 import type { Side } from './types.js';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import type { Config } from './config.js';
 import { MobileAuth } from './mobile-auth.js';
 import { MfpClient, isActiveAccount } from './mfp.js';
 import { SecretBox } from './crypto.js';
 import { buildTicket, calculateSize, platformRuleCheck } from './risk.js';
+import type { PersonalGuards } from './mobile-guards.js';
 
 const hosts={live:'https://developers.myfundedperpetuals.com',sandbox:'https://sandbox.myfundedperpetuals.com'};
+function checkQuickPrefs(prefs:PersonalGuards|undefined,riskUsd:number){
+  if(prefs?.quickTradeEnabled!==true)throw new MobileValidationError('Enable one-tap trading in Settings first.');
+  if(!(prefs.quickAmounts??[10,50,100]).includes(riskUsd))throw new MobileValidationError('Choose one of your saved quick risk amounts.');
+}
 export function tradeInput(input: Record<string,unknown>) {
   const riskUsd=Number(input.riskUsd),leverage=Number(input.leverage),stopPercent=Number(input.stopPercent),rewardRisk=Number(input.rewardRisk);
   if(typeof input.marketId!=='string'||!input.marketId||(input.side!=='buy'&&input.side!=='sell'))throw new MobileValidationError('Choose a market and direction.');
@@ -28,7 +33,12 @@ export class MobileTrading {
     return {connection,client};
   }
   async quote(token:string,input:Record<string,unknown>){
+    if(input.requestId!==undefined)return this.quickQuote(token,input,await this.quickId(token,input.requestId));
+    return this.createQuote(token,input,randomUUID(),false);
+  }
+  private async createQuote(token:string,input:Record<string,unknown>,id:string,quick:boolean){
     const values=tradeInput(input),{connection,client}=await this.connection(token);
+    if(quick)checkQuickPrefs(connection.personal_guards,values.riskUsd);
     const [account,policy,markets,positions]=await Promise.all([client.getAccount(connection.selected_account_id),client.getTradingPolicy(connection.selected_account_id),client.listMarkets(),client.listOpenPositions(connection.selected_account_id)]);
     if(!isActiveAccount(account))throw new MobileValidationError('Select an active account from Home.');
     const market=markets.find(m=>m.id===values.marketId&&m.available!==false);
@@ -38,7 +48,7 @@ export class MobileTrading {
     const size=calculateSize(values.riskUsd,first.mid,values.stopPercent,market.size_precision??market.quantity_precision??6);
     const quote=await client.getQuote(market.id,values.side,size);
     if(quote.fillable===false)throw new MobileValidationError('This size is not fillable at the market precision.');
-    const ticket=buildTicket({id:randomUUID(),userId:0,accountId:account.id,market,symbol:String(market.symbol??market.id.split('|').at(-1)),...values,quote,ttlSeconds:this.config.CONFIRMATION_TTL_SECONDS});
+    const ticket=buildTicket({id,userId:0,accountId:account.id,market,symbol:String(market.symbol??market.id.split('|').at(-1)),...values,quote,ttlSeconds:this.config.CONFIRMATION_TTL_SECONDS});
     // Preserve the exact size used for MFP's size-aware quote.
     ticket.size = size;
     const direction = values.side === 'buy' ? 1 : -1;
@@ -49,31 +59,42 @@ export class MobileTrading {
     ticket.platformRules=platformRuleCheck({account,policy,market,ticket,openPositions:positions});
     if(ticket.size<=0||!Number.isFinite(ticket.size)||!Number.isFinite(ticket.expectedPrice)||ticket.stopLossPrice<=0||ticket.takeProfitPrice<=0)throw new MobileValidationError('These inputs produce invalid prices or size.');
     ticket.platformRules.warnings.push(...guardWarnings(connection.personal_guards,account,ticket.riskUsd));
-    await this.auth.saveTicket(token,ticket);
-    return {ticket,dryRun:this.config.DRY_RUN,accountName:account.name??account.id};
+    const saved=quick ? await this.auth.saveTicket(token,ticket,true) : await this.auth.saveTicket(token,ticket);
+    const stored=quick&&saved===false ? (await this.auth.ticketResult(token,id))?.payload : ticket;
+    if(!stored)throw new Error('Could not load the saved trade.');
+    return {ticket:stored,dryRun:this.config.DRY_RUN,accountName:account.name??account.id};
+  }
+  private async quickId(token:string,requestId:unknown){
+    if(typeof requestId!=='string'||!/^[a-zA-Z0-9_-]{20,80}$/.test(requestId))throw new MobileValidationError('Open a new one-tap order confirmation.');
+    const user=await this.auth.user(token);
+    return 'quick-'+createHash('sha256').update(JSON.stringify([user.id,requestId])).digest('hex').slice(0,32);
+  }
+  private async quickQuote(token:string,input:Record<string,unknown>,id:string){
+    const previous=await this.auth.ticketResult(token,id);
+    if(previous)return {ticket:previous.payload,dryRun:this.config.DRY_RUN};
+    return this.createQuote(token,input,id,true);
   }
   async quick(token:string,input:Record<string,unknown>){
-    const connection=await this.auth.connection(token);
-    const prefs=connection?.personal_guards;
-    if(prefs?.quickTradeEnabled!==true)throw new MobileValidationError('Enable one-tap trading in Settings first.');
-    const amounts=prefs.quickAmounts??[10,50,100];
-    if(!amounts.includes(Number(input.riskUsd)))throw new MobileValidationError('Choose one of your saved quick risk amounts.');
-    const {ticket}=await this.quote(token,input);
-    const result=await this.confirm(token,ticket.id);
+    const id=await this.quickId(token,input.requestId);
+    const {ticket}=await this.quickQuote(token,input,id);
+    const result=await this.confirm(token,id);
     return {...result,warnings:ticket.platformRules?.warnings??[]};
   }
   async confirm(token:string,id:string){
-    const {connection,client}=await this.connection(token);
+    const quick=id.startsWith('quick-');
+    const standardConnection=quick ? undefined : await this.connection(token);
     const ticket=await this.auth.claimTicket(token,id);
     if(!ticket){
       const previous=await this.auth.ticketResult(token,id);
       if(previous?.result?.status==='not_submitted')throw new MobileValidationError('This order was not sent. Review a new quote.');
       if(previous?.result)return previous.result;
       if(previous?.submitted_at)throw new MobileWriteUncertainError('This request was already submitted.');
-      throw new MobileValidationError('Quote expired. Review a new quote.');
+      throw new MobileValidationError(quick?'Quote expired. Tap the saved amount again.':'Quote expired. Review a new quote.');
     }
     let submitted=false;
     try{
+      const {connection,client}=standardConnection??await this.connection(token);
+      if(quick)checkQuickPrefs(connection.personal_guards,ticket.riskUsd);
       if(connection.selected_account_id!==ticket.accountId)throw new MobileValidationError('Selected account changed. Review a new quote.');
       const [account,policy,markets,positions]=await Promise.all([client.getAccount(ticket.accountId),client.getTradingPolicy(ticket.accountId),client.listMarkets(),client.listOpenPositions(ticket.accountId)]);
       if(!isActiveAccount(account))throw new MobileValidationError('The account is no longer active.');
@@ -83,10 +104,14 @@ export class MobileTrading {
       const check=platformRuleCheck({account,policy,market,ticket,openPositions:positions});
       if(check.problems.length)throw new MobileValidationError(check.problems.join(' '));
       if(this.config.DRY_RUN){const result={dryRun:true,status:'validated'};await this.auth.saveTicketResult(id,result);return result;}
-      if (Date.now() >= ticket.expiresAt) throw new MobileValidationError('Quote expired. Review a new quote.');
+      if (Date.now() >= ticket.expiresAt) throw new MobileValidationError(quick?'Quote expired. Tap the saved amount again.':'Quote expired. Review a new quote.');
       submitted=true;
       const order=await client.placeProtectedMarketOrder({accountId:ticket.accountId,marketId:ticket.marketId,side:ticket.side,size:ticket.size,expectedPrice:ticket.expectedPrice,leverage:ticket.leverage,stopLossPrice:ticket.stopLossPrice,takeProfitPrice:ticket.takeProfitPrice,clientOrderId:`guardian-native-${ticket.id}`,idempotencyKey:ticket.id});
-      const result={dryRun:false,status:String(order.status??'pending'),orderId:order.id};
+      const orderId=order.id??order.order_id;
+      if(quick&&(typeof orderId!=='string'||!orderId.trim()||typeof order.status!=='string'||!order.status.trim())){
+        throw new MobileWriteUncertainError('The order could not be confirmed.');
+      }
+      const result={dryRun:false,status:String(order.status??'pending'),orderId:quick?orderId:order.id};
       await this.auth.saveTicketResult(id,result);return result;
     }catch(e){
       if(!submitted)await this.auth.saveTicketResult(id,{status:'not_submitted'});

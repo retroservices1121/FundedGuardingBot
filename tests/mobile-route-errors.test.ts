@@ -20,7 +20,7 @@ const position: Position = {
   provider:'binance', symbol:'BTCUSDT', coin:'BTC', side:'long', entry_price:100,
   leverage:1, margin_mode:'cross', isolated_margin_extra:0, status:'open', opened_at:0,
 };
-const trade = { marketId:position.market_id, side:'buy', riskUsd:10, leverage:1, stopPercent:1, rewardRisk:2 };
+const trade = { marketId:position.market_id, side:'buy', riskUsd:10, leverage:1, stopPercent:1, rewardRisk:2, requestId:'quick-test-request-id-01' };
 const edit = { positionId:position.id, takeProfitPrice:120, stopLossPrice:95 };
 let server: Server;
 let base: string;
@@ -41,6 +41,7 @@ beforeAll(async () => {
 
 beforeEach(() => {
   pool.query.mockReset().mockResolvedValue({rows:[{id:'user',provider:'apple'}]});
+  vi.spyOn(MobileAuth.prototype,'ticketResult').mockResolvedValue(undefined);
   vi.spyOn(MobileAuth.prototype,'connection').mockResolvedValue({
     environment:'live', selected_account_id:'account',
     encrypted_api_key:new SecretBox(config.ENCRYPTION_KEY).encrypt('test-key'),
@@ -68,6 +69,7 @@ function post(path: string, data: unknown, authorized = true) {
 
 describe('mobile route errors', () => {
   it.each([
+    ['trade/quick', {...trade,requestId:undefined}, 'Open a new one-tap order confirmation.'],
     ['trade/quick', {...trade,riskUsd:11}, 'Choose one of your saved quick risk amounts.'],
     ['protection', {}, 'Choose an open position.'],
     ['protection/quote', {...edit,positionId:'missing'}, 'Position is no longer open on this account.'],
@@ -92,6 +94,7 @@ describe('mobile route errors', () => {
     const error = new MfpError('Upstream response',upstreamStatus);
     vi.spyOn(MobileAuth.prototype,'saveTicket').mockImplementation(async (_token,ticket) => {
       vi.spyOn(MobileAuth.prototype,'claimTicket').mockResolvedValue(ticket);
+      return true;
     });
     const send = vi.spyOn(MfpClient.prototype,'placeProtectedMarketOrder').mockRejectedValue(error);
     const response = await post('trade/quick',trade);
@@ -105,6 +108,7 @@ describe('mobile route errors', () => {
   it('keeps the result uncertain if saving the accepted order fails', async () => {
     vi.spyOn(MobileAuth.prototype,'saveTicket').mockImplementation(async (_token,ticket) => {
       vi.spyOn(MobileAuth.prototype,'claimTicket').mockResolvedValue(ticket);
+      return true;
     });
     vi.spyOn(MobileAuth.prototype,'saveTicketResult').mockRejectedValue(new Error('Storage failed.'));
     const send = vi.spyOn(MfpClient.prototype,'placeProtectedMarketOrder').mockResolvedValue({id:'order',status:'pending'});
@@ -112,6 +116,17 @@ describe('mobile route errors', () => {
     expect(response.status).toBe(500);
     expect(await response.json()).toMatchObject({uncertain:true});
     expect(send).toHaveBeenCalledTimes(1);
+  });
+
+  it('turns one-tap trading off with a patch to the saved preferences', async () => {
+    const guards={mode:'warn',maxRiskUsd:30,quickAmounts:[10,50,100],quickTradeEnabled:false};
+    pool.query.mockImplementation(async (sql:string) => sql.startsWith('UPDATE mobile_connections')
+      ? {rows:[{personal_guards:guards}],rowCount:1}
+      : {rows:[{id:'user',provider:'apple'}]});
+    const response=await post('guards',{quickTradeEnabled:false});
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual(guards);
+    expect(pool.query).toHaveBeenCalledWith(expect.stringContaining(`personal_guards || '{"quickTradeEnabled":false}'::jsonb`),['user']);
   });
 
   it.each([

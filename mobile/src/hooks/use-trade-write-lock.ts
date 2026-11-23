@@ -36,13 +36,13 @@ export function useTradeWriteLock() {
     await clear();
   }, [clear, update]);
 
-  const run = useCallback(async <T,>(send: () => Promise<T>): Promise<T> => {
+  const run = useCallback(async <T,>(send: () => Promise<T>, requestId?: string): Promise<T> => {
     if (current.current === 'uncertain') throw new TradeWriteUncertainError();
     if (current.current !== 'ready') throw new Error('An account request is already being checked.');
     update('pending');
     // Save before sending so an app restart cannot turn an unresolved write into a retry.
     try {
-      await SecureStore.setItemAsync(key, 'pending');
+      await SecureStore.setItemAsync(key, requestId ?? 'pending');
     } catch {
       update('uncertain');
       throw new TradeWriteUncertainError();

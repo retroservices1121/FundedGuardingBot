@@ -664,7 +664,13 @@ export function startMiniAppServer(config: Config, db: Database) {
             const connection=await mobileAuth.connection(token);
             if(!connection)return json(response,400,{error:"Connect MyFundedPerps first."});
             if(request.method==='GET')return json(response,200,connection.personal_guards??{mode:'off'});
-            if(request.method==='POST'){const input=await body(request);const guards=parseGuards({...connection.personal_guards,...input});await mobileAuth.saveGuards(token,guards);return json(response,200,guards);}
+            if(request.method==='POST'){
+              const input=await mobileBody(request);
+              if(input.quickTradeEnabled===false&&Object.keys(input).length===1)return json(response,200,await mobileAuth.disableQuickTrade(token));
+              const guards=parseGuards({...connection.personal_guards,...input});
+              await mobileAuth.saveGuards(token,guards);
+              return json(response,200,guards);
+            }
           }
           if(url.pathname==='/api/mobile/auth/notifications'){
             const user=await mobileAuth.user(token);
