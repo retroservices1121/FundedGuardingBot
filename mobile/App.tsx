@@ -10,32 +10,15 @@ import * as Apple from 'expo-apple-authentication';
 import * as SecureStore from 'expo-secure-store';
 import { GoogleSignin, isSuccessResponse } from '@react-native-google-signin/google-signin';
 
-import { isTradeCheck, isTradeWrite, tradeWriteResult, type ConfirmRetry } from './src/lib/trade-write';
+import { isTradeWrite, type ConfirmRetry } from './src/lib/trade-write';
+import { createMobileRequest, SessionError } from './src/lib/mobile-request';
 import { useTradeWriteLock } from './src/hooks/use-trade-write-lock';
 
 type User = { id: string; provider: string; email?: string };
 const key = 'guardian.native.session';
 const apiUrl = (process.env.EXPO_PUBLIC_API_URL ?? Constants.expoConfig?.extra?.apiUrl)?.replace(/\/$/, '');
 GoogleSignin.configure({ iosClientId: Constants.expoConfig?.extra?.googleIosClientId });
-class SessionError extends Error {}
-async function request(path: string, method = 'GET', data?: unknown, token?: string) {
-  if (token === DEMO_TOKEN) throw new Error('Demo requests must stay on this device.');
-  if (!apiUrl || !apiUrl.startsWith('https://')) throw new Error('The app server is not configured yet.');
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 15000);
-  try {
-    const response = await fetch(`${apiUrl}/api/mobile/auth/${path}`, { method, signal: controller.signal,
-      headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-      ...(data ? { body: JSON.stringify(data) } : {}) });
-    const result = await response.json();
-    if (isTradeWrite(path, method) || isTradeCheck(path, method)) return tradeWriteResult(response.ok, response.status, result);
-    if (!response.ok) {
-      if (response.status === 401) throw new SessionError(result.error);
-      throw new Error(result.error ?? 'Could not reach Guardian. Try again.');
-    }
-    return result;
-  } finally { clearTimeout(timer); }
-}
+const request = createMobileRequest(apiUrl);
 // Installation IDs describe app launches, not App Store downloads or advertising identity.
 let launchTracking: Promise<{installId:string;platform:string;version:string}|undefined> | undefined;
 function trackLaunch() {
@@ -138,10 +121,14 @@ export default function App({ children }: { children: ReactNode }) {
     if (!token || pending.current) return;
     pending.current = true; setBusy(true); setError('');
     try {
-      await request(remove ? 'account' : 'logout', remove ? 'DELETE' : 'POST', undefined, token);
-      await SecureStore.deleteItemAsync(key);
-      setToken(null); setUser(null);
+      if (remove) await request('account', 'DELETE', undefined, token);
+      const logout = remove ? undefined : request('logout', 'POST', undefined, token).catch(() => undefined);
+      setToken(null); setUser(null); setPassword('');
       void GoogleSignin.signOut().catch(() => {});
+      await Promise.all([
+        SecureStore.deleteItemAsync(key).catch(() => setError('Could not remove the saved sign-in from this device.')),
+        logout,
+      ]);
     } catch (e) { setError(e instanceof Error ? e.message : 'Please try again.'); }
     finally { pending.current = false; setBusy(false); }
   }
