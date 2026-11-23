@@ -1,7 +1,16 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildQuotePath, isActiveAccount, MfpClient, normalizeMarkets, orderPrice, orderRejectionReason, positionExitOrders } from "../src/mfp.js";
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+});
+
+const orderInput = {
+  accountId: "account", marketId: "gold", side: "buy" as const, size: 1, expectedPrice: 4_000,
+  leverage: 2, stopLossPrice: 3_980, takeProfitPrice: 4_040, clientOrderId: "guardian-t", idempotencyKey: "entry-key",
+};
 
 describe("market response normalization", () => {
   it("maps the documented market_id field to the internal id", () => {
@@ -54,7 +63,7 @@ describe("position lifecycle requests", () => {
     vi.stubGlobal("fetch", request);
     await new MfpClient("https://example.test", "secret").closePosition("position/1", 0.25, 101.5, "close-key");
     expect(request.mock.calls[0]![0]).toBe("https://example.test/v1/positions/position%2F1/close");
-    expect(JSON.parse(request.mock.calls[0]![1].body)).toEqual({ expected_price: 101.5, size: 0.25 });
+    expect(JSON.parse(request.mock.calls[0]![1].body)).toEqual({ client_order_id: "guardian-close-close-key", expected_price: 101.5, size: 0.25 });
     expect(request.mock.calls[0]![1].headers["Idempotency-Key"]).toBe("close-key");
   });
 
@@ -62,7 +71,7 @@ describe("position lifecycle requests", () => {
     const request = vi.fn().mockResolvedValue(new Response(JSON.stringify({ data: { status: "pending" } }), { status: 200, headers: { "Content-Type": "application/json" } }));
     vi.stubGlobal("fetch", request);
     await new MfpClient("https://example.test", "secret").closePosition("position-1", undefined, 99.5, "close-all-key");
-    expect(JSON.parse(request.mock.calls[0]![1].body)).toEqual({ expected_price: 99.5 });
+    expect(JSON.parse(request.mock.calls[0]![1].body)).toEqual({ client_order_id: "guardian-close-close-all-key", expected_price: 99.5 });
   });
 
   it("replaces existing protection with one atomic OCO operation", async () => {
@@ -78,6 +87,84 @@ describe("position lifecycle requests", () => {
       { kind: "place", group: "tp", execution_type: "market", price: 110, size: 0.1, oco_pair_with_operation_index: 2 },
       { kind: "place", group: "sl", execution_type: "market", price: 95, size: 0.1, oco_pair_with_operation_index: 1 },
     ]);
+  });
+});
+
+describe("order write recovery", () => {
+  const client = new MfpClient("https://example.test", "test-key");
+  const receipt = { id: "order", status: "filled" };
+
+  it("looks up the documented order page by client order ID and account only", async () => {
+    const request = vi.fn()
+      .mockResolvedValueOnce(Response.json({ data: [receipt], next_cursor: null }))
+      .mockResolvedValueOnce(Response.json({ data: [] }));
+    vi.stubGlobal("fetch", request);
+    await expect(client.findOrderByClientOrderId("order /1", "account")).resolves.toEqual(receipt);
+    expect(request.mock.calls[0]![0]).toBe("https://example.test/v1/orders?client_order_id=order+%2F1&account_id=account");
+    expect(request.mock.calls[0]![1].method).toBeUndefined();
+    await expect(client.findOrderByClientOrderId("missing", "account")).resolves.toBeUndefined();
+  });
+
+  it.each([429, 500, 502, 503])("retries an order on %s with backoff and the identical request", async status => {
+    vi.useFakeTimers();
+    vi.spyOn(Math, "random").mockReturnValue(0.5);
+    const request = vi.fn()
+      .mockResolvedValueOnce(Response.json(null, { status, headers: { "Retry-After": "1" } }))
+      .mockResolvedValueOnce(Response.json({}, { status }))
+      .mockResolvedValueOnce(Response.json({ data: receipt }));
+    vi.stubGlobal("fetch", request);
+    const result = client.placeProtectedMarketOrder(orderInput);
+    await vi.advanceTimersByTimeAsync(1_049);
+    expect(request).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(request).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(449);
+    expect(request).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(result).resolves.toEqual(receipt);
+    expect(request).toHaveBeenCalledTimes(3);
+    for (const [path, init] of request.mock.calls) {
+      expect(path).toBe("https://example.test/v1/orders");
+      expect(init.headers["Idempotency-Key"]).toBe("entry-key");
+      expect(init.body).toBe(request.mock.calls[0]![1].body);
+    }
+  });
+
+  it("limits close retries and keeps both IDs and the full payload stable", async () => {
+    vi.useFakeTimers();
+    const request = vi.fn().mockImplementation(async () => Response.json({}, { status: 503 }));
+    vi.stubGlobal("fetch", request);
+    const rejected = expect(client.closePosition("position", 0.25, 100, "close-key")).rejects.toMatchObject({ status: 503 });
+    await vi.runAllTimersAsync();
+    await rejected;
+    expect(request).toHaveBeenCalledTimes(3);
+    for (const [, init] of request.mock.calls) {
+      expect(init.headers["Idempotency-Key"]).toBe("close-key");
+      expect(JSON.parse(init.body)).toEqual({client_order_id:"guardian-close-close-key",expected_price:100,size:0.25});
+    }
+  });
+
+  it("does not retry earlier than a long Retry-After or resend on a timeout", async () => {
+    const request = vi.fn()
+      .mockResolvedValueOnce(Response.json({}, { status: 429, headers: { "Retry-After": "60" } }))
+      .mockRejectedValueOnce(new DOMException("Timed out", "TimeoutError"));
+    vi.stubGlobal("fetch", request);
+    await expect(client.placeProtectedMarketOrder(orderInput)).rejects.toMatchObject({ status: 429 });
+    expect(request).toHaveBeenCalledTimes(1);
+    await expect(client.closePosition("position", undefined, 100, "close-key")).rejects.toMatchObject({ timedOut: true });
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps an earlier server failure ambiguous when a retry is denied", async () => {
+    vi.useFakeTimers();
+    const request = vi.fn()
+      .mockResolvedValueOnce(Response.json({}, { status: 500 }))
+      .mockResolvedValueOnce(Response.json({}, { status: 401 }));
+    vi.stubGlobal("fetch", request);
+    const rejected = expect(client.placeProtectedMarketOrder(orderInput)).rejects.toMatchObject({ status: 500 });
+    await vi.runAllTimersAsync();
+    await rejected;
+    expect(request).toHaveBeenCalledTimes(2);
   });
 });
 

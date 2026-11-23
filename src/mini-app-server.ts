@@ -94,7 +94,7 @@ async function mobileOperation(response: ServerResponse, write: boolean, run: ()
       status = error.status === 408 || error.status === 504 ? 504 : [429, 503].includes(error.status) ? 503 : 502;
     }
     if (error instanceof MobileWriteUncertainError) status = 503;
-    if (write) return json(response, status, {
+    if (write || error instanceof MobileWriteUncertainError) return json(response, status, {
       error: "The result is unknown. Check MyFundedPerps before trying again.",
       uncertain: true,
     });
@@ -709,13 +709,13 @@ export function startMiniAppServer(config: Config, db: Database) {
             catch(error) { return json(response,400,{error:errorMessage(error)}); }
           }
           if (url.pathname === "/api/mobile/auth/close/quote" && request.method === "POST") {
-            await mobileAuth.user(token);
-            try { return json(response,200,await mobileActivity.quoteClose(token,await body(request))); }
-            catch(error) { return json(response,400,{error:errorMessage(error)}); }
+            return await mobileOperation(response, false, async () => mobileActivity.quoteClose(token, await mobileBody(request)));
           }
-          if (url.pathname === "/api/mobile/auth/close/confirm" && request.method === "POST") {
-            return await mobileOperation(response, true, async () =>
-              mobileActivity.confirmClose(token, mobileTicketId(await mobileBody(request), "Review a close first.")));
+          if (["/api/mobile/auth/close/confirm","/api/mobile/auth/close/check"].includes(url.pathname) && request.method === "POST") {
+            return await mobileOperation(response, true, async () => {
+              const input = await mobileBody(request);
+              return mobileActivity.confirmClose(token, mobileTicketId(input, "Review a close first."), url.pathname.endsWith("/check"));
+            });
           }
           if (url.pathname === "/api/mobile/auth/trade/quick" && request.method === "POST") {
             return await mobileOperation(response, true, async () => mobileTrading.quick(token, await mobileBody(request)));
@@ -723,9 +723,11 @@ export function startMiniAppServer(config: Config, db: Database) {
           if (url.pathname === "/api/mobile/auth/trade/quote" && request.method === "POST") {
             return await mobileOperation(response, false, async () => mobileTrading.quote(token, await mobileBody(request)));
           }
-          if (url.pathname === "/api/mobile/auth/trade/confirm" && request.method === "POST") {
-            return await mobileOperation(response, true, async () =>
-              mobileTrading.confirm(token, mobileTicketId(await mobileBody(request), "Review a trade first.")));
+          if (["/api/mobile/auth/trade/confirm","/api/mobile/auth/trade/check"].includes(url.pathname) && request.method === "POST") {
+            return await mobileOperation(response, true, async () => {
+              const input = await mobileBody(request);
+              return mobileTrading.confirm(token, mobileTicketId(input, "Review a trade first."), url.pathname.endsWith("/check"));
+            });
           }
           if (url.pathname === "/api/mobile/auth/markets" && request.method === "GET") {
             await mobileAuth.user(token);

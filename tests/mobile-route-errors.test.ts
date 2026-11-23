@@ -7,6 +7,7 @@ import type { Database } from '../src/db.js';
 import { MfpClient, MfpError } from '../src/mfp.js';
 import { startMiniAppServer } from '../src/mini-app-server.js';
 import { MobileAuth } from '../src/mobile-auth.js';
+import { MobileWriteUncertainError } from '../src/mobile-errors.js';
 import { MobilePush } from '../src/mobile-push.js';
 import type { Position } from '../src/types.js';
 
@@ -42,6 +43,7 @@ beforeAll(async () => {
 beforeEach(() => {
   pool.query.mockReset().mockResolvedValue({rows:[{id:'user',provider:'apple'}]});
   vi.spyOn(MobileAuth.prototype,'ticketResult').mockResolvedValue(undefined);
+  vi.spyOn(MfpClient.prototype,'findOrderByClientOrderId').mockResolvedValue(undefined);
   vi.spyOn(MobileAuth.prototype,'connection').mockResolvedValue({
     environment:'live', selected_account_id:'account',
     encrypted_api_key:new SecretBox(config.ENCRYPTION_KEY).encrypt('test-key'),
@@ -116,6 +118,15 @@ describe('mobile route errors', () => {
     expect(response.status).toBe(500);
     expect(await response.json()).toMatchObject({uncertain:true});
     expect(send).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['trade/quote','close/quote'])('shows the uncertain lock on %s', async path => {
+    const locked = new MobileWriteUncertainError('A previous request for this market is still being checked.');
+    vi.spyOn(MobileAuth.prototype,'saveTicket').mockRejectedValue(locked);
+    vi.spyOn(MobileAuth.prototype,'saveClose').mockRejectedValue(locked);
+    const response = await post(path,path === 'trade/quote' ? {...trade,requestId:undefined} : {positionId:position.id,percent:25});
+    expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({error:'The result is unknown. Check MyFundedPerps before trying again.',uncertain:true});
   });
 
   it('turns one-tap trading off with a patch to the saved preferences', async () => {

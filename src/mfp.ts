@@ -85,6 +85,8 @@ export class MfpTransportError extends Error {
   }
 }
 
+export const closeClientOrderId = (key: string) => `guardian-close-${key}`;
+
 export class MfpClient {
   constructor(
     private readonly baseUrl: string,
@@ -114,8 +116,8 @@ export class MfpClient {
       error?: { code?: string; message?: string; details?: unknown } | string;
     };
     if (!response.ok) {
-      const error = typeof payload.error === "object" ? payload.error : undefined;
-      const baseMessage = typeof payload.error === "string"
+      const error = typeof payload?.error === "object" ? payload.error : undefined;
+      const baseMessage = typeof payload?.error === "string"
         ? payload.error
         : error?.message ?? detailText(error?.details) ?? `MyFundedPerps request failed (${response.status}).`;
       const fieldDetail = Array.isArray(error?.details)
@@ -136,7 +138,31 @@ export class MfpClient {
         error?.details,
       );
     }
-    return (payload as ApiEnvelope<T>).data;
+    return (payload as ApiEnvelope<T>)?.data;
+  }
+
+  private async orderWrite(path: string, init: RequestInit) {
+    let ambiguous: MfpError | undefined;
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return await this.request<Record<string, unknown>>(path, init);
+      } catch (error) {
+        if (!(error instanceof MfpError) || ![429, 500, 502, 503].includes(error.status)) {
+          // A later refusal cannot prove an earlier attempt did not go through.
+          throw ambiguous ?? error;
+        }
+        if (error.status !== 429) ambiguous = error;
+        if (attempt === 2) throw ambiguous ?? error;
+        const retryAfter = error.retryAfter?.trim();
+        const wait = !retryAfter ? 0 : /^\d+$/.test(retryAfter)
+          ? Number(retryAfter) * 1000
+          : Date.parse(retryAfter) - Date.now();
+        const delay = Math.max(Number.isNaN(wait) ? 0 : wait, 200 * 2 ** attempt) + Math.random() * 100;
+        // Let the caller reconcile if the requested pause exceeds our retry budget.
+        if (delay > 5_000) throw ambiguous ?? error;
+        await new Promise(resolve => setTimeout(resolve, delay));
+      }
+    }
   }
 
   listAccounts() {
@@ -175,7 +201,7 @@ export class MfpClient {
     clientOrderId: string;
     idempotencyKey?: string;
   }) {
-    const result = await this.request<Record<string, unknown>>("/v1/orders", {
+    const result = await this.orderWrite("/v1/orders", {
       method: "POST",
       headers: { "Idempotency-Key": input.idempotencyKey ?? randomUUID() },
       body: JSON.stringify({
@@ -192,7 +218,7 @@ export class MfpClient {
         stop_loss_price: input.stopLossPrice,
       }),
     });
-    const status = String(result.status ?? "").toLowerCase();
+    const status = String(result?.status ?? "").toLowerCase();
     if (["rejected", "failed", "denied"].includes(status)) {
       throw new MfpError(orderRejectionReason(result) ?? "The order was rejected by the trading rules.", 422, typeof result.code === "string" ? result.code : undefined, null, result);
     }
@@ -216,6 +242,12 @@ export class MfpClient {
     return result.orders ?? result.items ?? [];
   }
 
+  async findOrderByClientOrderId(clientOrderId: string, accountId: string) {
+    const query = new URLSearchParams({ client_order_id: clientOrderId, account_id: accountId });
+    const orders = await this.request<Record<string, unknown>[]>(`/v1/orders?${query}`);
+    return Array.isArray(orders) && orders.length === 1 ? orders[0] : undefined;
+  }
+
   cancelOrder(orderId: string) {
     return this.request<Record<string, unknown>>(`/v1/orders/${encodeURIComponent(orderId)}`, { method: "DELETE" });
   }
@@ -223,10 +255,10 @@ export class MfpClient {
   closePosition(positionId: string, size: number | undefined, expectedPrice: number, idempotencyKey: string = randomUUID()) {
     if (size !== undefined && (!Number.isFinite(size) || size <= 0)) throw new Error("Close size must be positive.");
     if (!Number.isFinite(expectedPrice) || expectedPrice <= 0) throw new Error("Expected close price must be positive.");
-    return this.request<Record<string, unknown>>(`/v1/positions/${encodeURIComponent(positionId)}/close`, {
+    return this.orderWrite(`/v1/positions/${encodeURIComponent(positionId)}/close`, {
       method: "POST",
       headers: { "Idempotency-Key": idempotencyKey },
-      body: JSON.stringify({ expected_price: expectedPrice, ...(size === undefined ? {} : { size }) }),
+      body: JSON.stringify({ client_order_id: closeClientOrderId(idempotencyKey), expected_price: expectedPrice, ...(size === undefined ? {} : { size }) }),
     });
   }
 

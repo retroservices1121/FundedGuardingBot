@@ -10,7 +10,7 @@ import * as Apple from 'expo-apple-authentication';
 import * as SecureStore from 'expo-secure-store';
 import { GoogleSignin, isSuccessResponse } from '@react-native-google-signin/google-signin';
 
-import { isTradeWrite, tradeWriteResult } from './src/lib/trade-write';
+import { isTradeCheck, isTradeWrite, tradeWriteResult, type ConfirmRetry } from './src/lib/trade-write';
 import { useTradeWriteLock } from './src/hooks/use-trade-write-lock';
 
 type User = { id: string; provider: string; email?: string };
@@ -28,7 +28,7 @@ async function request(path: string, method = 'GET', data?: unknown, token?: str
       headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
       ...(data ? { body: JSON.stringify(data) } : {}) });
     const result = await response.json();
-    if (isTradeWrite(path, method)) return tradeWriteResult(response.ok, response.status, result);
+    if (isTradeWrite(path, method) || isTradeCheck(path, method)) return tradeWriteResult(response.ok, response.status, result);
     if (!response.ok) {
       if (response.status === 401) throw new SessionError(result.error);
       throw new Error(result.error ?? 'Could not reach Guardian. Try again.');
@@ -51,7 +51,7 @@ function trackLaunch() {
     return payload;
   })().catch(()=>undefined);
 }
-type Session = { writeState: ReturnType<typeof useTradeWriteLock>['state']; acknowledgeWrite: () => Promise<void>; quickTradeOff: boolean; setQuickTradeOff: (off: boolean) => void; demo: boolean; token: string; user: User; request: typeof request; busy: boolean; leave: (remove?: boolean) => Promise<void>; error: string };
+type Session = { writeState: ReturnType<typeof useTradeWriteLock>['state']; acknowledgeWrite: () => Promise<void>; pendingConfirm?: ConfirmRetry; checkConfirm: () => ReturnType<typeof request>; quickTradeOff: boolean; setQuickTradeOff: (off: boolean) => void; demo: boolean; token: string; user: User; request: typeof request; busy: boolean; leave: (remove?: boolean) => Promise<void>; error: string };
 const SessionContext = createContext<Session | null>(null);
 export function useSession() { const value = useContext(SessionContext); if (!value) throw new Error('Sign in first.'); return value; }
 export default function App({ children }: { children: ReactNode }) {
@@ -69,12 +69,18 @@ export default function App({ children }: { children: ReactNode }) {
   const [quickTradeOffFor, setQuickTradeOffFor] = useState<string | null>(null);
   const setQuickTradeOff = useCallback((off: boolean) => setQuickTradeOffFor(off ? user?.id ?? null : null), [user?.id]);
   const demo = token === DEMO_TOKEN;
-  const { state: writeState, run: runWrite, acknowledge: acknowledgeWrite } = useTradeWriteLock();
-  const liveRequest = useCallback<typeof request>((path, method = 'GET', data, token) =>
-    isTradeWrite(path, method)
-      ? runWrite(() => request(path, method, data, token), path === 'trade/quick' ? (data as {requestId?:string} | undefined)?.requestId : undefined)
-      : request(path, method, data, token),
-  [runWrite]);
+  const { state: writeState, run: runWrite, acknowledge: acknowledgeWrite, confirm: pendingConfirm, check } = useTradeWriteLock();
+  const userId = user?.id;
+  const liveRequest = useCallback<typeof request>((path, method = 'GET', data, token) => {
+    if (!isTradeWrite(path, method)) return request(path, method, data, token);
+    const input = data as {ticketId?:string;requestId?:string} | undefined;
+    if ((path === 'trade/confirm' || path === 'close/confirm') && input?.ticketId && userId) {
+      const checkPath = path === 'trade/confirm' ? 'trade/check' : 'close/check';
+      return runWrite(() => request(path, method, data, token), {path:checkPath,ticketId:input.ticketId,userId});
+    }
+    return runWrite(() => request(path, method, data, token), path === 'trade/quick' ? input?.requestId : undefined);
+  }, [runWrite, userId]);
+  const checkConfirm = () => check(userId ?? '', intent => request(intent.path, 'POST', {ticketId:intent.ticketId}, token ?? undefined));
   function enterDemo(){if(loading||busy)return;demoClient.reset();setError('');setToken(DEMO_TOKEN);setUser(DEMO_USER);}
   async function hydrate() {
     try {
@@ -139,7 +145,7 @@ export default function App({ children }: { children: ReactNode }) {
     } catch (e) { setError(e instanceof Error ? e.message : 'Please try again.'); }
     finally { pending.current = false; setBusy(false); }
   }
-  if (user && token && !loading) return <SessionContext.Provider value={{demo,user,token,request:demo?demoClient.request:liveRequest,writeState:demo?'ready':writeState,acknowledgeWrite,quickTradeOff:quickTradeOffFor===user.id,setQuickTradeOff,busy,leave,error}}><StatusBar style="light" /><View style={{flex:1,backgroundColor:'#07120e'}}>{demo&&<SafeAreaView edges={['top']} style={{backgroundColor:'#173a2b'}}><View style={{paddingHorizontal:18,paddingVertical:8,flexDirection:'row',alignItems:'center',justifyContent:'space-between',gap:12}}><Text style={{color:'#f4f8f5',fontSize:12,flexShrink:1}}>DEMO · Sample data · No real orders</Text><Pressable accessibilityRole="button" accessibilityLabel="Exit demo" onPress={()=>void leave()} hitSlop={8} style={{padding:8}}><Text style={{color:'#2dcc98',fontWeight:'700'}}>Exit</Text></Pressable></View></SafeAreaView>}<View style={{flex:1}}>{children}</View></View></SessionContext.Provider>;
+  if (user && token && !loading) return <SessionContext.Provider value={{demo,user,token,request:demo?demoClient.request:liveRequest,writeState:demo?'ready':writeState,acknowledgeWrite,pendingConfirm,checkConfirm,quickTradeOff:quickTradeOffFor===user.id,setQuickTradeOff,busy,leave,error}}><StatusBar style="light" /><View style={{flex:1,backgroundColor:'#07120e'}}>{demo&&<SafeAreaView edges={['top']} style={{backgroundColor:'#173a2b'}}><View style={{paddingHorizontal:18,paddingVertical:8,flexDirection:'row',alignItems:'center',justifyContent:'space-between',gap:12}}><Text style={{color:'#f4f8f5',fontSize:12,flexShrink:1}}>DEMO · Sample data · No real orders</Text><Pressable accessibilityRole="button" accessibilityLabel="Exit demo" onPress={()=>void leave()} hitSlop={8} style={{padding:8}}><Text style={{color:'#2dcc98',fontWeight:'700'}}>Exit</Text></Pressable></View></SafeAreaView>}<View style={{flex:1}}>{children}</View></View></SessionContext.Provider>;
   return <View style={styles.container}>
     <LoginCandles />
     <StatusBar style="light" />

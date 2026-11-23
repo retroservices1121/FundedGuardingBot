@@ -1,4 +1,4 @@
-import { TradeWriteUncertainError } from '../../lib/trade-write';
+import { orderResultMessage, TradeWriteUncertainError } from '../../lib/trade-write';
 import { TradeWriteNotice } from '../../components/trade-write-notice';
 import { router } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
@@ -48,7 +48,7 @@ export default function Activity(){
   // eslint-disable-next-line react-hooks/purity
   if(pending.current||writeState!=='ready')return;if(Date.now()>=ticket.expiresAt){setError('Close quote expired. Review a new close quote.');return;}
   pending.current=true;setAction(true);setError('');
-  try{const result=await request('close/confirm','POST',{ticketId:ticket.id},token);setNotice(result.dryRun?'Dry run validated. Position remains open.':`Close submitted. Status: ${result.status}. Awaiting MFP confirmation.`);await refresh.current?.();}
+  try{const result=await request('close/confirm','POST',{ticketId:ticket.id},token);setNotice(orderResultMessage(result,true));await refresh.current?.();}
   catch(e){if(!(e instanceof TradeWriteUncertainError))setError(e instanceof Error?e.message:'Could not confirm close.');}
   finally{pending.current=false;setAction(false);}
  }

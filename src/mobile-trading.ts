@@ -8,8 +8,10 @@ import { MfpClient, isActiveAccount } from './mfp.js';
 import { SecretBox } from './crypto.js';
 import { buildTicket, calculateSize, platformRuleCheck } from './risk.js';
 import type { PersonalGuards } from './mobile-guards.js';
+import { orderRequestRejected, reconcileOrder, submitOrder } from './mobile-order.js';
 
 const hosts={live:'https://developers.myfundedperpetuals.com',sandbox:'https://sandbox.myfundedperpetuals.com'};
+const entryClientOrderId=(id:string)=>`guardian-native-${id}`;
 function checkQuickPrefs(prefs:PersonalGuards|undefined,riskUsd:number){
   if(prefs?.quickTradeEnabled!==true)throw new MobileValidationError('Enable one-tap trading in Settings first.');
   if(!(prefs.quickAmounts??[10,50,100]).includes(riskUsd))throw new MobileValidationError('Choose one of your saved quick risk amounts.');
@@ -80,20 +82,25 @@ export class MobileTrading {
     const result=await this.confirm(token,id);
     return {...result,warnings:ticket.platformRules?.warnings??[]};
   }
-  async confirm(token:string,id:string){
+  async confirm(token:string,id:string,checkOnly=false){
     const quick=id.startsWith('quick-');
-    const standardConnection=quick ? undefined : await this.connection(token);
-    const ticket=await this.auth.claimTicket(token,id);
+    if(checkOnly)await this.auth.cancelUnclaimedTicket(token,id);
+    const ticket=checkOnly ? undefined : await this.auth.claimTicket(token,id);
     if(!ticket){
       const previous=await this.auth.ticketResult(token,id);
       if(previous?.result?.status==='not_submitted')throw new MobileValidationError('This order was not sent. Review a new quote.');
       if(previous?.result)return previous.result;
-      if(previous?.submitted_at)throw new MobileWriteUncertainError('This request was already submitted.');
+      if(previous?.submitted_at){
+        const lookup=await this.connection(token).catch(()=>undefined);
+        const result=lookup&&await reconcileOrder(lookup.client,entryClientOrderId(id),previous.payload.accountId);
+        if(result){await this.auth.saveTicketResult(id,result);return result;}
+        throw new MobileWriteUncertainError('This request was already submitted.');
+      }
       throw new MobileValidationError(quick?'Quote expired. Tap the saved amount again.':'Quote expired. Review a new quote.');
     }
     let submitted=false;
     try{
-      const {connection,client}=standardConnection??await this.connection(token);
+      const {connection,client}=await this.connection(token);
       if(quick)checkQuickPrefs(connection.personal_guards,ticket.riskUsd);
       if(connection.selected_account_id!==ticket.accountId)throw new MobileValidationError('Selected account changed. Review a new quote.');
       const [account,policy,markets,positions]=await Promise.all([client.getAccount(ticket.accountId),client.getTradingPolicy(ticket.accountId),client.listMarkets(),client.listOpenPositions(ticket.accountId)]);
@@ -106,15 +113,11 @@ export class MobileTrading {
       if(this.config.DRY_RUN){const result={dryRun:true,status:'validated'};await this.auth.saveTicketResult(id,result);return result;}
       if (Date.now() >= ticket.expiresAt) throw new MobileValidationError(quick?'Quote expired. Tap the saved amount again.':'Quote expired. Review a new quote.');
       submitted=true;
-      const order=await client.placeProtectedMarketOrder({accountId:ticket.accountId,marketId:ticket.marketId,side:ticket.side,size:ticket.size,expectedPrice:ticket.expectedPrice,leverage:ticket.leverage,stopLossPrice:ticket.stopLossPrice,takeProfitPrice:ticket.takeProfitPrice,clientOrderId:`guardian-native-${ticket.id}`,idempotencyKey:ticket.id});
-      const orderId=order.id??order.order_id;
-      if(quick&&(typeof orderId!=='string'||!orderId.trim()||typeof order.status!=='string'||!order.status.trim())){
-        throw new MobileWriteUncertainError('The order could not be confirmed.');
-      }
-      const result={dryRun:false,status:String(order.status??'pending'),orderId:quick?orderId:order.id};
+      const clientOrderId=entryClientOrderId(ticket.id);
+      const result=await submitOrder(client,clientOrderId,ticket.accountId,()=>client.placeProtectedMarketOrder({accountId:ticket.accountId,marketId:ticket.marketId,side:ticket.side,size:ticket.size,expectedPrice:ticket.expectedPrice,leverage:ticket.leverage,stopLossPrice:ticket.stopLossPrice,takeProfitPrice:ticket.takeProfitPrice,clientOrderId,idempotencyKey:ticket.id}));
       await this.auth.saveTicketResult(id,result);return result;
     }catch(e){
-      if(!submitted)await this.auth.saveTicketResult(id,{status:'not_submitted'});
+      if(!submitted||orderRequestRejected(e))await this.auth.saveTicketResult(id,{status:'not_submitted'});
       throw e;
     }
   }

@@ -1,7 +1,34 @@
 const writePaths = new Set(['trade/confirm', 'trade/quick', 'close/confirm', 'protection/confirm']);
 
 export const isTradeWrite = (path: string, method: string) => method === 'POST' && writePaths.has(path);
+export const isTradeCheck = (path: string, method: string) => method === 'POST' && (path === 'trade/check' || path === 'close/check');
 export const uncertainWriteMessage = 'The result is unknown. Check MyFundedPerps before trying again.';
+export type ConfirmRetry = { path: 'trade/check' | 'close/check'; ticketId: string; userId: string };
+
+export function parseConfirmRetry(value: string | null): ConfirmRetry | undefined {
+  if (!value?.startsWith('{')) return;
+  try {
+    const data = JSON.parse(value);
+    if (isTradeCheck(data?.path, 'POST') && typeof data.ticketId === 'string' && data.ticketId &&
+        typeof data.userId === 'string' && data.userId) return data;
+  } catch { /* Older lock values have no saved ticket. */ }
+}
+
+export function orderResultMessage({dryRun,status}: {dryRun:boolean; status:string}, close = false) {
+  if (dryRun) return close ? 'Dry run checked. The position was left open.' : 'Dry run checked. No order was sent.';
+  const action = close ? 'close order' : 'order';
+  switch (status.toLowerCase()) {
+    case 'filled': return `MyFundedPerps filled the ${action}.`;
+    case 'rejected':
+    case 'failed':
+    case 'denied': return `MyFundedPerps rejected the ${action}.`;
+    case 'canceled': return `MyFundedPerps reports that the ${action} was canceled.`;
+    case 'expired': return `MyFundedPerps reports that the ${action} expired.`;
+    case 'pending':
+    case 'resting': return `The ${action} is pending. Check MyFundedPerps for the latest status.`;
+    default: return `MyFundedPerps received the ${action}. Check its status there.`;
+  }
+}
 
 export class TradeWriteValidationError extends Error {}
 export class TradeWriteUncertainError extends Error {

@@ -1,4 +1,4 @@
-import { TradeWriteUncertainError } from '../../lib/trade-write';
+import { orderResultMessage, TradeWriteUncertainError } from '../../lib/trade-write';
 import { TradeWriteNotice } from '../../components/trade-write-notice';
 import { useIsFocused } from 'expo-router/react-navigation';
 import { Link, useLocalSearchParams, useNavigation } from 'expo-router';
@@ -47,7 +47,7 @@ export default function Trade(){
    ));
    if(!accepted||!navigation.isFocused())return;
    const value=await request('trade/quick','POST',{requestId},token);
-   setResult(value.dryRun?'Practice order checked. No order was sent.':'Order submitted. Check MyFundedPerps for the final fill.');
+   setResult(value.dryRun?'Practice order checked. No order was sent.':orderResultMessage(value));
   }
   catch(e){if(!(e instanceof TradeWriteUncertainError))setError(e instanceof Error?e.message:'Could not submit trade.');}
   finally{pending.current=false;setBusy(false);}
@@ -64,7 +64,7 @@ export default function Trade(){
  }
  async function confirm(){
   if(!ticket||pending.current||submitted||writeState!=='ready')return;pending.current=true;setBusy(true);setError('');setSubmitted(true);
-  try{const value=await request('trade/confirm','POST',{ticketId:ticket.id},token);setResult(value.dryRun?'Dry run validated. No order was sent.':`Order submitted. Status: ${value.status}. Check MyFundedPerps for the final fill.`);setTicket(null);}
+  try{const value=await request('trade/confirm','POST',{ticketId:ticket.id},token);setResult(orderResultMessage(value));setTicket(null);}
   catch(e){if(!(e instanceof TradeWriteUncertainError))setError(e instanceof Error?e.message:'Submission could not be confirmed. Check MyFundedPerps before placing another trade.');}
   finally{pending.current=false;setBusy(false);}
  }
@@ -79,9 +79,9 @@ export default function Trade(){
    {([['Risk at stop',money(ticket.riskUsd)],['Size',String(ticket.size)],['Leverage',`${ticket.leverage}x`],['Estimated entry',money(ticket.expectedPrice)],['Stop loss',money(ticket.stopLossPrice)],['Take profit',money(ticket.takeProfitPrice)],['Potential profit at TP',money(Math.abs(ticket.takeProfitPrice-ticket.expectedPrice)*ticket.size)],['Estimated notional',money(ticket.estimatedNotional)],['Estimated entry fee',money(ticket.estimatedFee)],['Estimated margin + entry fee',money(ticket.platformRules?.estimatedMargin)]] as const).map(([label,value])=><View key={label} style={styles.row}><Text style={styles.copy}>{label}</Text><Text style={styles.value}>{value}</Text></View>)}
    <Text style={styles.small}>Risk at stop excludes fees and slippage. Stop execution may differ from the stop price.</Text>
    {ticket.platformRules?.warnings.map(w=><Text key={w} style={styles.warning}>{w}</Text>)}
-   <Text style={styles.copy}>{expired?'Quote expired. Review again.':`Quote expires in ${Math.max(0,Math.ceil((ticket.expiresAt-now)/1000))} seconds.`}</Text>
+   {!submitted&&<Text style={styles.copy}>{expired?'Quote expired. Review again.':`Quote expires in ${Math.max(0,Math.ceil((ticket.expiresAt-now)/1000))} seconds.`}</Text>}
    <Pressable accessibilityRole="button" disabled={busy||expired||submitted||writeState!=='ready'} style={[styles.button,(busy||expired||submitted||writeState!=='ready')&&styles.disabled]} onPress={()=>Alert.alert(dryRun?'Validate dry run?':'Confirm order?',`${ticket.symbol} ${ticket.side==='buy'?'Long':'Short'} on ${accountName}`, [{text:'Cancel',style:'cancel'},{text:dryRun?'Validate':'Submit order',onPress:()=>void confirm()}])}><Text style={styles.buttonText}>{submitted?'Submission attempted':dryRun?'Validate dry run':'Confirm trade'}</Text></Pressable>
-   <Pressable accessibilityRole="button" disabled={busy} onPress={()=>{setTicket(null);setError('');}}><Text style={styles.link}>Back to trade inputs</Text></Pressable>
+   <Pressable accessibilityRole="button" disabled={busy||writeState!=='ready'} onPress={()=>{setTicket(null);setError('');}}><Text style={styles.link}>Back to trade inputs</Text></Pressable>
   </View>:<>
    <TextInput accessibilityLabel="Search markets or venues" placeholder="Search markets or venues" placeholderTextColor="#82968b" style={styles.input} value={search} onChangeText={v=>{setSearch(v);setSelector(true);}} autoCorrect={false}/>
    {!markets&&<ActivityIndicator color="#2dcc98"/>}

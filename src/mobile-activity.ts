@@ -3,9 +3,10 @@ import { createClosedPositionShareCard } from "./share-card.js";
 import type { Position } from "./types.js";
 import { randomUUID } from 'node:crypto';
 import { MobileAuth } from './mobile-auth.js';
-import { MfpClient, positionExitOrders } from './mfp.js';
+import { closeClientOrderId, MfpClient, positionExitOrders } from './mfp.js';
 import { SecretBox } from './crypto.js';
 import type { Config } from './config.js';
+import { orderRequestRejected, reconcileOrder, submitOrder } from './mobile-order.js';
 export function closeSize(size:number,percent:number,precision:number){
   if(![25,50,75,100].includes(percent)||!Number.isFinite(size)||size<=0)throw new MobileValidationError('Choose a valid close percentage for an open position.');
   if(percent===100)return undefined;
@@ -41,24 +42,41 @@ export class MobileActivity {
   const ticket={id:randomUUID(),accountId:connection.selected_account_id,positionId:position.id,marketId:position.market_id,symbol:position.symbol??position.coin,originalSize:Math.abs(position.size),size,percent,expectedPrice:quote.mid,estimatedFee:quote.estimated_fee,expiresAt:Date.now()+this.config.CONFIRMATION_TTL_SECONDS*1000};
   await this.auth.saveClose(token,ticket);return {ticket,dryRun:this.config.DRY_RUN};
  }
- async confirmClose(token:string,id:string){
-  const {connection,client}=await this.session(token);
-  if(connection.environment==='live'&&!this.config.ALLOW_LIVE_TRADING)throw new MobileValidationError('Live account operations are disabled.');
-  const ticket=await this.auth.claimClose(token,id);
+ async confirmClose(token:string,id:string,checkOnly=false){
+  if(checkOnly)await this.auth.cancelUnclaimedTicket(token,id,true);
+  const ticket=checkOnly ? undefined : await this.auth.claimClose(token,id);
   if(!ticket){
-   if(await this.auth.closeTicketSubmitted(token,id))throw new MobileWriteUncertainError('This close was already submitted.');
+   const previous=await this.auth.closeTicketResult(token,id);
+   if(previous?.payload.kind==='protection')throw new MobileValidationError('This is not a close quote.');
+   if(previous?.result?.status==='not_submitted')throw new MobileValidationError('This close was not sent. Review a new close quote.');
+   if(previous?.result)return previous.result;
+   if(previous?.submitted_at){
+    const lookup=await this.session(token).catch(()=>undefined);
+    const result=lookup&&await reconcileOrder(lookup.client,closeClientOrderId(id),previous.payload.accountId);
+    if(result){await this.auth.saveCloseResult(id,result);return result;}
+    throw new MobileWriteUncertainError('This close was already submitted.');
+   }
    throw new MobileValidationError('Close quote expired. Review a new close quote.');
   }
   if(ticket.kind==='protection')throw new MobileValidationError('This is not a close quote.');
-  if(ticket.accountId!==connection.selected_account_id)throw new MobileValidationError('Account changed. Review a new close quote.');
-  const positions=await client.listOpenPositions(ticket.accountId),position=positions.find(p=>p.id===ticket.positionId);
-  if(!position||Math.abs(position.size)!==ticket.originalSize)throw new MobileValidationError('Position size changed. Refresh and review a new close quote.');
-  const quote=await client.getQuote(position.market_id,position.side==='long'?'sell':'buy',ticket.size??Math.abs(position.size));
-  if(quote.fillable===false||!Number.isFinite(quote.mid)||quote.mid<=0)throw new MobileValidationError('A fillable close quote is unavailable.');
-  if(Date.now()>=ticket.expiresAt)throw new MobileValidationError('Close quote expired. Review again.');
-  if(this.config.DRY_RUN)return {dryRun:true,status:'validated'};
-  const result=await client.closePosition(position.id,ticket.size,quote.mid,ticket.id);
-  return {dryRun:false,status:String(result.status??'pending')};
+  let submitted=false;
+  try{
+   const {connection,client}=await this.session(token);
+   if(connection.environment==='live'&&!this.config.ALLOW_LIVE_TRADING)throw new MobileValidationError('Live account operations are disabled.');
+   if(ticket.accountId!==connection.selected_account_id)throw new MobileValidationError('Account changed. Review a new close quote.');
+   const positions=await client.listOpenPositions(ticket.accountId),position=positions.find(p=>p.id===ticket.positionId);
+   if(!position||Math.abs(position.size)!==ticket.originalSize)throw new MobileValidationError('Position size changed. Refresh and review a new close quote.');
+   const quote=await client.getQuote(position.market_id,position.side==='long'?'sell':'buy',ticket.size??Math.abs(position.size));
+   if(quote.fillable===false||!Number.isFinite(quote.mid)||quote.mid<=0)throw new MobileValidationError('A fillable close quote is unavailable.');
+   if(Date.now()>=ticket.expiresAt)throw new MobileValidationError('Close quote expired. Review again.');
+   if(this.config.DRY_RUN){const result={dryRun:true,status:'validated'};await this.auth.saveCloseResult(id,result);return result;}
+   submitted=true;
+   const result=await submitOrder(client,closeClientOrderId(ticket.id),ticket.accountId,()=>client.closePosition(position.id,ticket.size,quote.mid,ticket.id));
+   await this.auth.saveCloseResult(id,result);return result;
+  }catch(error){
+   if(!submitted||orderRequestRejected(error))await this.auth.saveCloseResult(id,{status:'not_submitted'});
+   throw error;
+  }
  }
  async share(token:string,positionId:string){
   const {connection,client}=await this.session(token);
@@ -84,13 +102,13 @@ export class MobileActivity {
   const takeProfitPrice=Number(input.takeProfitPrice),stopLossPrice=Number(input.stopLossPrice);
   const quote=await client.getQuote(position.market_id);
   validateProtection(position,quote.mid,takeProfitPrice,stopLossPrice);
-  const ticket={id:randomUUID(),kind:'protection',expectedOrders,accountId:connection.selected_account_id,positionId:position.id,originalSize:position.size,takeProfitPrice,stopLossPrice,expiresAt:Date.now()+this.config.CONFIRMATION_TTL_SECONDS*1000};
+  const ticket={id:randomUUID(),kind:'protection' as const,expectedOrders,accountId:connection.selected_account_id,positionId:position.id,originalSize:position.size,takeProfitPrice,stopLossPrice,expiresAt:Date.now()+this.config.CONFIRMATION_TTL_SECONDS*1000};
   await this.auth.saveClose(token,ticket);return {ticket,dryRun:this.config.DRY_RUN};
  }
  async confirmProtection(token:string,id:string){
   const {connection,client}=await this.session(token);
   if(connection.environment==='live'&&!this.config.ALLOW_LIVE_TRADING)throw new MobileValidationError('Live account operations are disabled.');
-  const ticket=await this.auth.claimClose(token,id);
+  const ticket=await this.auth.claimClose(token,id,true);
   if(!ticket){
    if(await this.auth.closeTicketSubmitted(token,id))throw new MobileWriteUncertainError('This edit was already submitted.');
    throw new MobileValidationError('Edit quote expired. Review again.');
