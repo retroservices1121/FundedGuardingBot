@@ -32,6 +32,13 @@ describe('trade write responses', () => {
     expect(orderResultMessage({dryRun:false,status:'rejected'},true)).toBe('MyFundedPerps rejected the close order.');
   });
 
+  it('directs legacy requests to MyFundedPerps and keeps the result uncertain', () => {
+    const message = "This older request can't be checked here. Please check MyFundedPerps for its status.";
+    expect(orderResultMessage({dryRun:false,status:'legacy'})).toBe(message);
+    expect(orderResultMessage({dryRun:false,status:'legacy'},true)).toBe(message);
+    expect(() => tradeWriteResult(true,200,{status:'legacy'})).toThrow(new TradeWriteUncertainError(message));
+  });
+
   it('explains practice outcomes without suggesting an order was sent', () => {
     const practice = {dryRun:true,status:'validated'};
     expect(orderResultMessage(practice)).toBe('Practice order complete. No order was sent.');

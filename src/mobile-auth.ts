@@ -24,7 +24,7 @@ const hash = (value: string) => createHash('sha256').update(value).digest('hex')
 type TicketMarket = { accountId: string; marketId: string };
 type TicketTable = 'mobile_trade_tickets' | 'mobile_close_tickets';
 type MobileTradeTicket = TradeTicket & {environment?: keyof typeof mobileOrderHosts};
-type PendingTicket = {payload: TicketMarket & {environment?: keyof typeof mobileOrderHosts}; submitted_at: Date};
+type PendingTicket = {payload: TicketMarket & {environment?: keyof typeof mobileOrderHosts}; submitted_age_seconds: number};
 type CloseTicketInput = { id: string; expiresAt: number; accountId: string; [key: string]: unknown } &
   ({ kind?: undefined; marketId: string } | { kind: 'protection' });
 export class MobileAuth {
@@ -230,7 +230,7 @@ export class MobileAuth {
   }
   private async reconcilePendingTicket(client: PoolClient, table: TicketTable, id: string, identityId: string) {
     // An active sender holds this row lock until its write finishes.
-    const pending = await client.query<PendingTicket>(`SELECT payload,submitted_at FROM ${table}
+    const pending = await client.query<PendingTicket>(`SELECT payload,EXTRACT(EPOCH FROM clock_timestamp() - submitted_at)::double precision AS submitted_age_seconds FROM ${table}
       WHERE id=$1 AND identity_id=$2 AND submitted_at IS NOT NULL AND result IS NULL FOR UPDATE SKIP LOCKED`,[id,identityId]);
     const ticket = pending.rows[0];
     if (!ticket || !this.secrets) return;
@@ -241,7 +241,7 @@ export class MobileAuth {
     try { mfp = new MfpClient(host,this.secrets.decrypt(connection.encrypted_api_key)); }
     catch { return; }
     const clientOrderId = table === 'mobile_close_tickets' ? closeClientOrderId(id) : entryClientOrderId(id);
-    const result = await reconcileOrder(mfp,clientOrderId,ticket.payload.accountId,ticket.payload.environment ? ticket.submitted_at : undefined);
+    const result = await reconcileOrder(mfp,clientOrderId,ticket.payload.accountId,ticket.payload.environment ? ticket.submitted_age_seconds : undefined);
     if (!result) return;
     if (result.status === 'not_submitted' && connection.selected_account_id !== ticket.payload.accountId) {
       const account = await mfp.getAccount(ticket.payload.accountId).catch(() => undefined);

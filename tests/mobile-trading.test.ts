@@ -28,7 +28,7 @@ function positionWithExit(side:Position['side']='long'){
 async function storedTickets(){
  const {auth,trading}=mocks();
  auth.connection.mockResolvedValue({...await auth.connection(),personal_guards:{mode:'off',quickTradeEnabled:true,quickAmounts:[10,65,100]}});
- const records=new Map<string,{payload:TradeTicket;submitted_at?:Date;result?:unknown}>();
+ const records=new Map<string,{payload:TradeTicket;submitted_at?:Date;submitted_age_seconds?:number;result?:unknown}>();
  auth.ticketResult.mockImplementation(async(_session,id)=>records.get(id));
  auth.saveTicket.mockImplementation(async(_session,ticket)=>{
   if(records.has(ticket.id))return false;
@@ -48,7 +48,7 @@ async function storedTickets(){
  auth.saveTicketResult.mockImplementation(async(id,result)=>{records.get(id)!.result=result;});
  auth.reconcileTicket.mockImplementation(async(_session,id)=>{
   const record=records.get(id)!;
-  const result=await reconcileOrder(new MfpClient('https://example.test','test'),entryClientOrderId(id),record.payload.accountId,record.submitted_at);
+  const result=await reconcileOrder(new MfpClient('https://example.test','test'),entryClientOrderId(id),record.payload.accountId,record.submitted_age_seconds);
   if(result)record.result=result;
   return result;
  });
@@ -276,7 +276,7 @@ describe('native trading',()=>{
   const lookup=vi.mocked(MfpClient.prototype.findOrderByClientOrderId);
   await expect(trading.quick('session',{requestId:quickInput.requestId,ticketId:'wrong-ticket'})).rejects.toThrow('Review a new one-tap order');
   await expect(trading.quick('session',{requestId:quickInput.requestId,ticketId:ticket.id})).rejects.toThrow('too long');
-  records.get(ticket.id)!.submitted_at=new Date(Date.now()-61_000);
+  records.get(ticket.id)!.submitted_age_seconds=61;
   lookup.mockResolvedValueOnce({status:'failed'});
   await expect(trading.confirm('session',ticket.id,true)).rejects.toThrow('already submitted');
   await expect(trading.confirm('session',ticket.id,true)).rejects.toThrow('This order was not sent');

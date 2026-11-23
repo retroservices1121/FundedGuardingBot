@@ -5,6 +5,7 @@ const writePaths = new Set(['trade/confirm', 'trade/quick', 'close/confirm', 'pr
 export const isTradeWrite = (path: string, method: string) => method === 'POST' && writePaths.has(path);
 export const isTradeCheck = (path: string, method: string) => method === 'POST' && (path === 'trade/check' || path === 'close/check');
 export const uncertainWriteMessage = 'The result is unknown. Check MyFundedPerps before trying again.';
+const legacyWriteMessage = "This older request can't be checked here. Please check MyFundedPerps for its status.";
 export type ConfirmRetry = { path: 'trade/check' | 'close/check'; ticketId: string; userId: string };
 
 export function parseConfirmRetry(value: string | null): ConfirmRetry | undefined {
@@ -20,6 +21,7 @@ export function orderResultMessage({dryRun,status}: {dryRun:boolean; status:stri
   if (dryRun) return close ? 'Practice close complete. No order was sent.' : 'Practice order complete. No order was sent.';
   const action = close ? 'close order' : 'order';
   switch (status.toLowerCase()) {
+    case 'legacy': return legacyWriteMessage;
     case 'filled': return `MyFundedPerps filled the ${action}.`;
     case 'rejected':
     case 'failed':
@@ -45,7 +47,7 @@ export function protectionResultMessage({dryRun,status}: {dryRun:boolean; status
 
 export class TradeWriteValidationError extends ScreenError {}
 export class TradeWriteUncertainError extends Error {
-  constructor() { super(uncertainWriteMessage); }
+  constructor(message = uncertainWriteMessage) { super(message); }
 }
 
 export function tradeWriteResult(ok: boolean, status: number, body: unknown) {
@@ -53,6 +55,9 @@ export function tradeWriteResult(ok: boolean, status: number, body: unknown) {
   // Older servers could send a validation status for an order that may have gone through.
   if (!ok && (status === 400 || status === 422) && result?.uncertain === false && typeof result.error === 'string' && result.error.trim()) {
     throw new TradeWriteValidationError(serverErrorMessage(result.error, 'The request was rejected. Review the details before trying again.'));
+  }
+  if (ok && result?.status === 'legacy' && result.error === undefined) {
+    throw new TradeWriteUncertainError(legacyWriteMessage);
   }
   if (!ok || !result || result.uncertain === true || result.error !== undefined ||
       typeof result.dryRun !== 'boolean' || typeof result.status !== 'string' || !result.status.trim() ||

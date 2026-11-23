@@ -42,7 +42,7 @@ describe('native connection ownership', () => {
 describe('native ticket recovery', () => {
   const ticket = {id:'new-ticket',accountId:'account',marketId:'market',expiresAt:Date.now()+10_000};
 
-  function pendingMarket(kind: 'trade' | 'close', age: number, active = false, environment = 'live', selectedAccount = ticket.accountId) {
+  function pendingMarket(kind: 'trade' | 'close', ageSeconds: number, active = false, environment = 'live', selectedAccount = ticket.accountId) {
     const table = kind === 'trade' ? 'mobile_trade_tickets' : 'mobile_close_tickets';
     const connection = {environment,encrypted_api_key:secrets.encrypt('test-key'),selected_account_id:selectedAccount};
     const pending = {id:'previous',identity_id:'previous-owner',kind};
@@ -52,8 +52,9 @@ describe('native ticket recovery', () => {
       if (sql.includes('UNION ALL')) return result(storedResult ? [] : [pending]);
       if (sql.includes('FOR UPDATE SKIP LOCKED')) {
         expect(sql).toContain(`FROM ${table}`);
+        expect(sql).toContain('EXTRACT(EPOCH FROM clock_timestamp() - submitted_at)::double precision AS submitted_age_seconds');
         expect(args).toEqual([pending.id,pending.identity_id]);
-        return result(active ? [] : [{payload:{...ticket,environment:'live'},submitted_at:new Date(Date.now()-age)}]);
+        return result(active ? [] : [{payload:{...ticket,environment:'live'},submitted_age_seconds:ageSeconds}]);
       }
       if (sql.startsWith('SELECT environment')) {
         expect(args).toEqual([pending.identity_id]);
@@ -75,7 +76,7 @@ describe('native ticket recovery', () => {
     ['trade','guardian-native-previous'],
     ['close','guardian-close-previous'],
   ] as const)('reconciles an aged pending %s before issuing a market quote', async (kind,orderId) => {
-    const {auth,query,lookup,result} = pendingMarket(kind,61_000);
+    const {auth,query,lookup,result} = pendingMarket(kind,60);
     await expect(auth.saveTicket('session',ticket as never)).resolves.toBe(true);
     expect(lookup).toHaveBeenCalledExactlyOnceWith(orderId,ticket.accountId);
     expect(result()).toEqual({status:'not_submitted'});
@@ -83,9 +84,9 @@ describe('native ticket recovery', () => {
   });
 
   it.each([
-    ['recent absence',1_000,false,'live',true],
-    ['active write',61_000,true,'live',false],
-    ['changed environment',61_000,false,'sandbox',false],
+    ['an absence just under 60 seconds',59.999999,false,'live',true],
+    ['active write',61,true,'live',false],
+    ['changed environment',61,false,'sandbox',false],
   ] as const)('keeps the market locked on %s', async (_case,age,active,environment,checksOrder) => {
     const {auth,query,lookup,result} = pendingMarket('trade',age,active,environment);
     await expect(auth.saveTicket('session',ticket as never)).rejects.toThrow('still being checked');
@@ -95,7 +96,7 @@ describe('native ticket recovery', () => {
   });
 
   it('keeps an empty lookup uncertain when the connection can no longer access the original account', async () => {
-    const {auth,lookup,result} = pendingMarket('trade',61_000,false,'live','other-account');
+    const {auth,lookup,result} = pendingMarket('trade',61,false,'live','other-account');
     const account = vi.spyOn(MfpClient.prototype,'getAccount').mockRejectedValue(new Error('Account is unavailable'));
     await expect(auth.saveTicket('session',ticket as never)).rejects.toThrow('still being checked');
     expect(lookup).toHaveBeenCalledExactlyOnceWith('guardian-native-previous',ticket.accountId);

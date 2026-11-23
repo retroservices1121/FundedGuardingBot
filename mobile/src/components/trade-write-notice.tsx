@@ -1,6 +1,6 @@
 import { Alert, Pressable, Text } from 'react-native';
 import { useSession } from '../../App';
-import { orderResultMessage, TradeWriteValidationError, uncertainWriteMessage } from '../lib/trade-write';
+import { orderResultMessage, TradeWriteUncertainError, TradeWriteValidationError, uncertainWriteMessage } from '../lib/trade-write';
 
 export function TradeWriteNotice() {
   const { writeState, acknowledgeWrite, pendingConfirm, checkConfirm, user } = useSession();
@@ -9,7 +9,7 @@ export function TradeWriteNotice() {
       const result = await checkConfirm();
       Alert.alert('Request status', orderResultMessage(result, pendingConfirm?.path === 'close/check'));
     } catch (error) {
-      Alert.alert('Request status', error instanceof TradeWriteValidationError ? error.message : uncertainWriteMessage);
+      Alert.alert('Request status', error instanceof TradeWriteValidationError || error instanceof TradeWriteUncertainError ? error.message : uncertainWriteMessage);
     }
   }
   if (writeState === 'pending' && pendingConfirm) return <Text accessibilityRole="alert" style={{color:'#2dcc98'}}>Checking your request…</Text>;

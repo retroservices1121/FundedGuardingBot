@@ -59,6 +59,7 @@ export function useTradeWriteLock() {
         throw error;
       }
       update('uncertain');
+      if (error instanceof TradeWriteUncertainError) throw error;
       throw new TradeWriteUncertainError();
     }
   }, [clear, update]);
