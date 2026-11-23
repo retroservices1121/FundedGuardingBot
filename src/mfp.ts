@@ -84,9 +84,43 @@ export class MfpError extends Error {
     readonly retryAfter?: string | null,
     readonly details?: unknown,
     readonly ruleId?: string,
+    readonly upstreamMessage: string = message,
   ) {
     super(message);
   }
+}
+
+const rejectionMessages: Readonly<Record<string, string>> = {
+  max_total_notional: "This order would put your account over its total position size limit. Try a smaller order.",
+  market_closed: "This market is closed. Try again when it reopens.",
+  weekend_closure: "This market is closed for the weekend.",
+  market_unavailable: "This market is unavailable for this order.",
+  market_venue_suspended: "Trading on this market is temporarily paused.",
+  account_trader_lockout_active: "Trader Lockout is active on your account. Wait until it ends before trying again.",
+  exit_allocation: "This order overlaps existing take-profit or stop-loss orders. Review those exits on MyFundedPerps before trying again.",
+  invalid_leverage: "The selected leverage is unavailable for this trade. Choose a lower leverage.",
+};
+
+export function mfpRejectionMessage(error: MfpError) {
+  for (const identifier of [error.ruleId, error.code]) {
+    if (typeof identifier !== "string") continue;
+    const key = identifier.trim().toLowerCase().replaceAll("-", "_");
+    if (Object.hasOwn(rejectionMessages, key)) return rejectionMessages[key]!;
+  }
+
+  const fallback = error.status === 401 || error.status === 403
+    ? "MyFundedPerps denied access. Check your account connection."
+    : "MyFundedPerps rejected the request. Check your account and the request details.";
+  const message = error.upstreamMessage.trim()
+    .replace(/(?:[a-z][a-z\d+.-]*:\/\/|\/\/|www\.)[^\s<>"')\]]+|\b(?:[a-z\d-]+\.)+[a-z]{2,}(?=[:/?#\s.,;!?)]|$)(?::\d+)?(?:[/?#][^\s<>"')\]]*)?/gi, "")
+    .replace(/(?:\bHTTP(?:\/\d+(?:\.\d+)?)?|\b(?:error|status|code))\s*[:=]?\s*[45]\d\d\b|\(\s*[45]\d\d\s*\)|^[45]\d\d\b/gi, "")
+    .replace(/\(\s*\)|\[\s*\]/g, "")
+    .replace(/^\s*[:;,–—-]+\s*/, "")
+    .replace(/[ \t]+/g, " ")
+    .replace(/\s+([.,!?])/g, "$1")
+    .trim();
+  const technical = /[\x00-\x1f<>{}\\/@=\x60]|[\u200b-\u200f\u202a-\u202e\u2060-\u206f]|\b(?:https?|sdk|api|json|sandbox|staging|production|bearer|authorization|credentials?|password|secret|token)\b|\b\w+(?:_\w+)+\b|\b\w{24,}\b|\b(?:\d{1,3}\.){3}\d{1,3}\b/i;
+  return message.length <= 300 && /[a-z]{2}/i.test(message) && !technical.test(message) ? message : fallback;
 }
 
 export class MfpTransportError extends Error {
@@ -130,9 +164,10 @@ export class MfpClient {
     };
     if (!response.ok) {
       const error = typeof payload?.error === "object" ? payload.error : undefined;
-      const baseMessage = typeof payload?.error === "string"
+      const upstreamMessage = typeof payload?.error === "string"
         ? payload.error
-        : error?.message ?? detailText(error?.details) ?? `MyFundedPerps request failed (${response.status}).`;
+        : typeof error?.message === "string" ? error.message : "";
+      const baseMessage = upstreamMessage || detailText(error?.details) || `MyFundedPerps request failed (${response.status}).`;
       const fieldDetail = Array.isArray(error?.details)
         ? error.details.map((item) => {
           if (!item || typeof item !== "object") return detailText(item);
@@ -144,12 +179,13 @@ export class MfpClient {
         : undefined;
       const message = fieldDetail && !baseMessage.includes(fieldDetail) ? `${baseMessage} ${fieldDetail}` : baseMessage;
       throw new MfpError(
-        message,
+        this.apiKey ? message.replaceAll(this.apiKey, "[redacted]") : message,
         response.status,
         error?.code,
         response.headers.get("retry-after"),
         error?.details,
         error?.rule_id,
+        this.apiKey && upstreamMessage.includes(this.apiKey) ? "" : upstreamMessage,
       );
     }
     if (allowBareList) {

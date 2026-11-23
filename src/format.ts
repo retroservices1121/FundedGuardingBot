@@ -42,13 +42,15 @@ export function tradeKeyboard() {
 
 export function ticketMessage(ticket: TradeTicket, dryRun: boolean) {
   const direction = ticket.side === "buy" ? "LONG" : "SHORT";
+  const stopPercent = (Math.abs(ticket.stopLossPrice - ticket.expectedPrice) / ticket.expectedPrice)
+    .toLocaleString("en-US", { style: "percent", maximumSignificantDigits: 4 });
   return [
     `${dryRun ? "🧪" : "⚠️"} Confirm ${ticket.symbol} ${direction}`,
     "",
     `Risk at stop: ${money(ticket.riskUsd)}`,
     `Size: ${ticket.size}`,
     `Estimated entry: ${money(ticket.expectedPrice)}`,
-    `Stop loss: ${money(ticket.stopLossPrice)}`,
+    `Stop loss: ${money(ticket.stopLossPrice)} (${stopPercent} from entry)`,
     `Take profit: ${money(ticket.takeProfitPrice)}`,
     `Estimated notional: ${money(ticket.estimatedNotional)}`,
     `Estimated entry fee: ${money(ticket.estimatedFee)}`,

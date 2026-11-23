@@ -1,6 +1,8 @@
 import { once } from 'node:events';
+import { createHmac } from 'node:crypto';
 import type { Server } from 'node:http';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createGuardianBot } from '../src/bot.js';
 import { loadConfig } from '../src/config.js';
 import { SecretBox } from '../src/crypto.js';
 import type { Database } from '../src/db.js';
@@ -9,7 +11,7 @@ import { startMiniAppServer } from '../src/mini-app-server.js';
 import { MobileAuth } from '../src/mobile-auth.js';
 import { MobileWriteUncertainError } from '../src/mobile-errors.js';
 import { MobilePush } from '../src/mobile-push.js';
-import type { Position } from '../src/types.js';
+import type { Position, TradeTicket } from '../src/types.js';
 
 const config = loadConfig({
   TELEGRAM_BOT_TOKEN:'test', DATABASE_URL:'postgres://localhost/test',
@@ -26,13 +28,20 @@ const edit = { positionId:position.id, takeProfitPrice:120, stopLossPrice:95 };
 let server: Server;
 let base: string;
 const pool = { query: vi.fn() };
+const telegramUser = {
+  telegramId:42, selectedAccountId:'account', guardianMode:'off',
+  riskUsd:10, stopPercent:1, rewardRisk:2, leverage:1,
+};
+const telegramDb = {
+  upsertUser:vi.fn(), getConnection:vi.fn(), getUser:vi.fn(), putTicket:vi.fn(), takeTicket:vi.fn(),
+};
 
 beforeAll(async () => {
   vi.spyOn(MobileAuth.prototype,'migrate').mockResolvedValue(undefined);
   vi.spyOn(MobilePush.prototype,'migrate').mockResolvedValue(undefined);
   vi.spyOn(MobilePush.prototype,'start').mockReturnValue(() => {});
   const log = vi.spyOn(console,'log').mockImplementation(() => {});
-  server = startMiniAppServer({...config,PORT:0},{pool} as unknown as Database);
+  server = startMiniAppServer({...config,PORT:0},{pool,...telegramDb} as unknown as Database);
   await once(server,'listening');
   log.mockRestore();
   const address = server.address();
@@ -70,7 +79,105 @@ function post(path: string, data: unknown, authorized = true) {
   });
 }
 
+function telegramPost(path: string, data: unknown) {
+  const init = new URLSearchParams({
+    auth_date:String(Math.floor(Date.now()/1000)),
+    user:JSON.stringify({id:telegramUser.telegramId,first_name:'Test'}),
+  });
+  const signed = [...init].map(([key,value]) => `${key}=${value}`).join('\n');
+  const hashKey = createHmac('sha256','WebAppData').update(config.TELEGRAM_BOT_TOKEN).digest();
+  init.set('hash',createHmac('sha256',hashKey).update(signed).digest('hex'));
+  return apiFetch(new URL('/api/trade/'+path,base),{
+    method:'POST',headers:{'Content-Type':'application/json',Authorization:`tma ${init}`},body:JSON.stringify(data),
+  });
+}
+
+describe('Telegram trading policy checks', () => {
+  beforeEach(() => {
+    Object.values(telegramDb).forEach(mock => mock.mockReset());
+    telegramDb.upsertUser.mockResolvedValue(telegramUser);
+    telegramDb.getUser.mockResolvedValue(telegramUser);
+    telegramDb.getConnection.mockResolvedValue({
+      environment:'live',encryptedApiKey:new SecretBox(config.ENCRYPTION_KEY).encrypt('test-key'),
+    });
+    vi.spyOn(MfpClient.prototype,'listAccounts').mockResolvedValue([{id:'account',status:'active'}]);
+    vi.mocked(MfpClient.prototype.listMarkets).mockResolvedValue([{id:trade.marketId,size_step:0.25,category:'crypto'}]);
+  });
+
+  it('blocks a mini-app quote outside the allowlist and rechecks policy at confirm', async () => {
+    const policy = vi.mocked(MfpClient.prototype.getTradingPolicy);
+    policy.mockResolvedValueOnce({competition:{market_allowlist:['ETH']}});
+    const blocked = await telegramPost('quote',trade);
+    expect(blocked.status).toBe(400);
+    expect(await blocked.json()).toEqual({error:'This market is not available in your competition.'});
+    expect(MfpClient.prototype.getQuote).not.toHaveBeenCalled();
+    expect(telegramDb.putTicket).not.toHaveBeenCalled();
+
+    const reviewed = await telegramPost('quote',trade);
+    expect(reviewed.status).toBe(200);
+    const {ticket} = await reviewed.json() as {ticket:TradeTicket};
+    telegramDb.takeTicket.mockResolvedValueOnce(ticket);
+    policy.mockResolvedValueOnce({trading_halt:{categories:['crypto']}});
+    const send = vi.spyOn(MfpClient.prototype,'placeProtectedMarketOrder');
+    const confirm = await telegramPost('confirm',{ticketId:ticket.id});
+    expect(confirm.status).toBe(400);
+    expect(await confirm.json()).toEqual({error:'MyFundedPerps has paused opening and increasing positions in this market.'});
+    expect(policy).toHaveBeenLastCalledWith(ticket.accountId);
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it('checks bot quotes and confirms even with personal guardrails off', async () => {
+    const bot = createGuardianBot(config,telegramDb as unknown as Database);
+    bot.botInfo = {
+      id:1,is_bot:true,first_name:'Guardian',username:'guardianbot',can_join_groups:true,
+      can_read_all_group_messages:false,supports_inline_queries:false,can_connect_to_business:false,
+      has_main_web_app:false,has_topics_enabled:false,allows_users_to_create_topics:false,
+      can_manage_bots:false,supports_join_request_queries:false,
+    };
+    const reply = vi.fn();
+    bot.api.config.use(async (_previous,method,payload) => {
+      if (method === 'sendMessage' && 'text' in payload) reply(payload.text);
+      return {ok:true,result:true} as never;
+    });
+    const tap = (data:string) => bot.handleUpdate({
+      update_id:1,callback_query:{
+        id:'callback',chat_instance:'test',data,
+        from:{id:telegramUser.telegramId,is_bot:false,first_name:'Test'},
+        message:{message_id:1,date:0,chat:{id:telegramUser.telegramId,type:'private',first_name:'Test'}},
+      },
+    });
+    const policy = vi.mocked(MfpClient.prototype.getTradingPolicy);
+    policy.mockResolvedValueOnce({trading_halt:{categories:['crypto']}});
+    await tap('draft:BTC:buy');
+    expect(reply).toHaveBeenLastCalledWith(expect.stringContaining('paused opening and increasing positions in this market'));
+    expect(MfpClient.prototype.getQuote).not.toHaveBeenCalled();
+
+    await tap('draft:BTC:buy');
+    const [ticket] = telegramDb.putTicket.mock.lastCall! as [TradeTicket];
+    telegramDb.takeTicket.mockResolvedValueOnce(ticket);
+    policy.mockResolvedValueOnce({payout_pending:true});
+    const send = vi.spyOn(MfpClient.prototype,'placeProtectedMarketOrder');
+    await tap('confirm:'+ticket.id);
+    expect(reply).toHaveBeenLastCalledWith(expect.stringContaining('Trading is paused while your payout is pending.'));
+    expect(policy).toHaveBeenLastCalledWith(ticket.accountId);
+    expect(send).not.toHaveBeenCalled();
+  });
+});
+
 describe('mobile route errors', () => {
+  it.each([
+    [new MfpError('Rejected',422,'max_total_notional'), 'This order would put your account over its total position size limit. Try a smaller order.'],
+    [new MfpError('Rejected',422,'market_closed'), 'This market is closed. Try again when it reopens.'],
+    [new MfpError('Rejected',422,'market_unavailable'), 'This market is unavailable for this order.'],
+    [new MfpError('Rejected',422,'account_trader_lockout_active'), 'Trader Lockout is active on your account. Wait until it ends before trying again.'],
+    [new MfpError('Rejected',422,'rule_violation',null,undefined,'exit-allocation'), 'This order overlaps existing take-profit or stop-loss orders. Review those exits on MyFundedPerps before trying again.'],
+    [new MfpError(' HTTP 422: Choose a smaller order. https://example.test/detail ',422), 'Choose a smaller order.'],
+  ])('returns plain copy for a MyFundedPerps rejection', async (error, message) => {
+    vi.mocked(MfpClient.prototype.getTradingPolicy).mockRejectedValue(error);
+    const response = await post('trade/quote',trade);
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({error:message,uncertain:false});
+  });
   it.each([
     ['trade/quick', {...trade,requestId:undefined}, 'Open a new one-tap order confirmation.'],
     ['trade/quick', {...trade,riskUsd:11}, 'Choose one of your saved quick risk amounts.'],

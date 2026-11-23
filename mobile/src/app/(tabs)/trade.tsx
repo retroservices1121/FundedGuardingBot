@@ -12,6 +12,11 @@ type Market={id:string;symbol:string;coin:string;provider:string;maxLeverage?:nu
 type Ticket={id:string;symbol:string;side:string;riskUsd:number;size:number;expectedPrice:number;stopLossPrice:number;takeProfitPrice:number;estimatedNotional:number;estimatedFee?:number;leverage:number;expiresAt:number;exitReplacement?:{positionId:string;orderIds:string[]};platformRules?:{warnings:string[];estimatedMargin?:number}};
 const exitReplacementMessage='If this order fills, its take profit and stop loss will replace existing exits and cover the full position.';
 const money=(v?:number)=>typeof v==='number'&&Number.isFinite(v)?new Intl.NumberFormat('en-US',{style:'currency',currency:'USD',maximumFractionDigits:v!==0&&Math.abs(v)<1?8:2}).format(v):'Unavailable';
+const stopLoss=(ticket:Ticket)=>{
+ const distance=Math.abs(ticket.stopLossPrice-ticket.expectedPrice)/ticket.expectedPrice;
+ const percent=distance.toLocaleString('en-US',{style:'percent',maximumSignificantDigits:4});
+ return `${money(ticket.stopLossPrice)} (${percent} from entry)`;
+};
 const newQuickRequestId=()=>`quick_${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}_${Math.random().toString(36).slice(2)}`;
 export default function Trade(){
  const focused=useIsFocused(),navigation=useNavigation();
@@ -43,7 +48,7 @@ export default function Trade(){
     quote.dryRun?'Confirm practice order?':'Submit market order?',
     [`${order.side==='buy'?'Long':'Short'} ${market.symbol} · ${market.provider}`,
      `Size ${order.size} · ${order.leverage}x leverage · ${money(order.riskUsd)} at risk`,
-     `Take profit ${money(order.takeProfitPrice)}\nStop loss ${money(order.stopLossPrice)}`,
+     `Take profit ${money(order.takeProfitPrice)}\nStop loss ${stopLoss(order)}`,
      ...(quote.dryRun?['No order will be sent.']:[]),
      ...(order.exitReplacement?[exitReplacementMessage]:[]),...warnings].join('\n'),
     [{text:'Cancel',style:'cancel',onPress:()=>resolve(false)},{text:quote.dryRun?'Confirm':'Submit order',onPress:()=>resolve(true)}],
@@ -83,7 +88,7 @@ export default function Trade(){
   {ticket?<View style={styles.card}>
    <Text style={styles.heading}>{ticket.symbol} {ticket.side==='buy'?'Long':'Short'}</Text><Text style={styles.copy}>{accountName}</Text>
    <Text style={styles.copy}>{dryRun?'Practice order. No order will be sent.':'Confirmation sends a market order with a take profit and stop loss.'}</Text>
-   {([['Risk at stop',money(ticket.riskUsd)],['Size',String(ticket.size)],['Leverage',`${ticket.leverage}x`],['Estimated entry',money(ticket.expectedPrice)],['Stop loss',money(ticket.stopLossPrice)],['Take profit',money(ticket.takeProfitPrice)],['Potential profit at take profit',money(Math.abs(ticket.takeProfitPrice-ticket.expectedPrice)*ticket.size)],['Estimated notional',money(ticket.estimatedNotional)],['Estimated entry fee',money(ticket.estimatedFee)],['Estimated margin + entry fee',money(ticket.platformRules?.estimatedMargin)]] as const).map(([label,value])=><View key={label} style={styles.row}><Text style={styles.copy}>{label}</Text><Text style={styles.value}>{value}</Text></View>)}
+   {([['Risk at stop',money(ticket.riskUsd)],['Size',String(ticket.size)],['Leverage',`${ticket.leverage}x`],['Estimated entry',money(ticket.expectedPrice)],['Stop loss',stopLoss(ticket)],['Take profit',money(ticket.takeProfitPrice)],['Potential profit at take profit',money(Math.abs(ticket.takeProfitPrice-ticket.expectedPrice)*ticket.size)],['Estimated notional',money(ticket.estimatedNotional)],['Estimated entry fee',money(ticket.estimatedFee)],['Estimated margin + entry fee',money(ticket.platformRules?.estimatedMargin)]] as const).map(([label,value])=><View key={label} style={styles.row}><Text style={styles.copy}>{label}</Text><Text style={styles.value}>{value}</Text></View>)}
    <Text style={styles.small}>Risk at stop excludes fees and slippage. Stop execution may differ from the stop price.</Text>
    {!!ticket.exitReplacement&&<Text style={styles.warning}>{exitReplacementMessage}</Text>}
    {ticket.platformRules?.warnings.map(w=><Text key={w} style={styles.warning}>{w}</Text>)}

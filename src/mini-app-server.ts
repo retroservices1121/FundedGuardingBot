@@ -15,9 +15,9 @@ import path from "node:path";
 import type { Config } from "./config.js";
 import { SecretBox } from "./crypto.js";
 import { Database } from "./db.js";
-import { isActiveAccount, isPassedAccount, MfpClient, MfpError, MfpTransportError } from "./mfp.js";
+import { isActiveAccount, isPassedAccount, MfpClient, MfpError, MfpTransportError, mfpRejectionMessage } from "./mfp.js";
 import { accountDailyPnl, automaticLockReason } from "./guardian.js";
-import { accountRisk, accountRuleProgress, buildTicket, calculateSize, guardAccount, marketAllowsOpening, marketOrderProblem, platformRuleCheck, resolveAccountRequirements, riskAllowance, RiskSizingError } from "./risk.js";
+import { accountRisk, accountRuleProgress, buildTicket, calculateSize, guardAccount, marketAllowsOpening, marketOrderProblem, platformRuleCheck, resolveAccountRequirements, riskAllowance, RiskSizingError, tradingPolicyProblems } from "./risk.js";
 import { createClosedPositionShareCard } from "./share-card.js";
 import { createPassedAccountCard } from "./passed-card.js";
 import { validateTelegramInitData, type TelegramMiniAppUser } from "./telegram-auth.js";
@@ -38,7 +38,11 @@ function json(response: ServerResponse, status: number, body: unknown) {
 }
 
 function errorMessage(error: unknown) {
-  if (error instanceof MfpError) return `MyFundedPerps: ${error.message}`;
+  if (error instanceof MfpError) {
+    return error.status >= 400 && error.status < 500
+      ? mfpRejectionMessage(error)
+      : "MyFundedPerps could not complete the request.";
+  }
   return error instanceof Error ? error.message : "Unexpected error.";
 }
 
@@ -83,9 +87,7 @@ async function mobileOperation(response: ServerResponse, write: boolean, run: ()
     }
     if (error instanceof MfpError && [400, 401, 403, 404, 422].includes(error.status)) {
       return json(response, 400, {
-        error: [401, 403].includes(error.status)
-          ? "MyFundedPerps denied access. Check your account connection."
-          : "MyFundedPerps rejected the request. Check your account and the request details.",
+        error: mfpRejectionMessage(error),
         uncertain: false,
       });
     }
@@ -298,6 +300,8 @@ export function startMiniAppServer(config: Config, db: Database) {
     }
     const market = markets.find(item => item.id === marketId);
     if (!market) throw new Error("That market is not currently available.");
+    const problems = tradingPolicyProblems(policy, market);
+    if (problems.length) throw new Error(problems.join(" "));
     if (!marketAllowsOpening(market)) throw new Error("This market is closed to new orders.");
     const symbol = marketSymbol(market);
     const firstQuote = await state.client.getQuote(market.id);
@@ -443,13 +447,16 @@ export function startMiniAppServer(config: Config, db: Database) {
       if (!ticket) throw new Error("This quote expired or was already used.");
       const currentUser = await db.getUser(user.telegramId);
       if (currentUser.lockedUntil && currentUser.lockedUntil.getTime() > Date.now()) throw new Error("Trading is locked.");
-      const [freshAccount, freshMarkets] = await Promise.all([
+      const [freshAccount, freshMarkets, policy] = await Promise.all([
         client.getAccount(ticket.accountId),
         client.listMarkets(),
+        client.getTradingPolicy(ticket.accountId),
       ]);
       if (!isActiveAccount(freshAccount)) throw new Error("This challenge is no longer active for trading.");
       const freshMarket = freshMarkets.find(item => item.id === ticket.marketId);
       if (!freshMarket) throw new Error("MyFundedPerps rule check: this market is no longer available.");
+      const problems = tradingPolicyProblems(policy, freshMarket);
+      if (problems.length) throw new Error(problems.join(" "));
       const marketProblem = marketOrderProblem(freshMarket, ticket.size, ticket.estimatedNotional);
       if (marketProblem) throw new Error(marketProblem);
       if (config.DRY_RUN) {
@@ -811,8 +818,10 @@ export function startMiniAppServer(config: Config, db: Database) {
       }
       json(response, 404, { error: "Not found." });
     } catch (error) {
-      const status = errorMessage(error).includes("Telegram authentication") || errorMessage(error).includes("Open Funded") ? 401 : 400;
-      json(response, status, { error: errorMessage(error) });
+      const message = errorMessage(error);
+      const needsTelegramAuth = !(error instanceof MfpError)
+        && (message.includes("Telegram authentication") || message.includes("Open Funded"));
+      json(response, needsTelegramAuth ? 401 : 400, { error: message });
     }
   });
 

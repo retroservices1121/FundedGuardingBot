@@ -69,13 +69,20 @@ describe('native trading',()=>{
   vi.mocked(MfpClient.prototype.listMarkets).mockResolvedValue([
    {id:input.marketId,size_step:0.25,size_decimals:3,trading_enabled:true,available:false},
   ]);
-  const {ticket}=await trading.quote('session',{...input,riskUsd:1.19});
+  const {ticket}=await trading.quote('session',{...input,riskUsd:1.09});
   expect(ticket.size).toBe(1);
+  expect((ticket.expectedPrice-ticket.stopLossPrice)/ticket.expectedPrice*100).toBeCloseTo(1.0792);
   expect(MfpClient.prototype.getQuote).toHaveBeenLastCalledWith(input.marketId,input.side,1);
   auth.claimTicket.mockResolvedValue(ticket);
   const send=vi.spyOn(MfpClient.prototype,'placeProtectedMarketOrder').mockResolvedValue({id:'order',status:'pending'});
   await trading.confirm('session',ticket.id);
   expect(send).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({size:1}));
+ });
+ it('does not save a quote when rounding would move the stop loss more than 10%',async()=>{
+  const {auth,trading}=mocks();
+  vi.mocked(MfpClient.prototype.listMarkets).mockResolvedValue([{id:input.marketId,size_step:0.25}]);
+  await expect(trading.quote('session',{...input,riskUsd:1.19})).rejects.toThrow('move your stop loss more than 10%');
+  expect(auth.saveTicket).not.toHaveBeenCalled();
  });
  it('rejects a rounded size below the market minimum before requesting a size-aware quote',async()=>{
   const {auth,trading}=mocks();

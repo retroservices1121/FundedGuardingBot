@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { ticketMessage } from "../src/format.js";
 import { accountRisk, accountRuleProgress, buildTicket, calculateSize, guardAccount, platformRuleCheck, resolveAccountRequirements, roundMarketSize } from "../src/risk.js";
 
 describe("risk sizing", () => {
@@ -27,6 +28,26 @@ describe("risk sizing", () => {
     expect(long.takeProfitPrice).toBe(101_000);
     expect(short.stopLossPrice).toBe(100_500);
     expect(short.takeProfitPrice).toBe(99_000);
+  });
+
+  it("allows exactly 10% drift and shows the quoted stop distance", () => {
+    const market = { id: "btc", size_step: 0.25 };
+    const size = calculateSize(1.1, 100, 1, market);
+    const ticket = buildTicket({
+      id: "t", userId: 1, accountId: "a", market, symbol: "BTC",
+      side: "buy", riskUsd: 1.1, quote: { bid: 99, ask: 101, mid: 100 }, size,
+      stopPercent: 1, rewardRisk: 2, leverage: 1, ttlSeconds: 45,
+    });
+    expect(ticket.stopLossPrice).toBe(98.9);
+    expect(ticketMessage(ticket, false)).toContain("Stop loss: $98.90 (1.1% from entry)");
+  });
+
+  it.each([89, 112])("rejects stop drift in either direction at entry %s", (entry) => {
+    expect(() => buildTicket({
+      id: "t", userId: 1, accountId: "a", market: { id: "btc", size_step: 0.25 }, symbol: "BTC",
+      side: "sell", riskUsd: 1, quote: { bid: 99, ask: 101, mid: 100, estimated_fill_price: entry }, size: 1,
+      stopPercent: 1, rewardRisk: 2, leverage: 1, ttlSeconds: 45,
+    })).toThrow("move your stop loss more than 10%");
   });
 });
 

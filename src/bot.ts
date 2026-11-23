@@ -5,7 +5,7 @@ import { SecretBox } from "./crypto.js";
 import { Database } from "./db.js";
 import { accountMessage, closedPositionsMessage, positionsMessage, ticketMessage, tradeKeyboard } from "./format.js";
 import { MfpClient, MfpError } from "./mfp.js";
-import { buildTicket, calculateSize, guardAccount, marketAllowsOpening, marketOrderProblem } from "./risk.js";
+import { buildTicket, calculateSize, guardAccount, marketAllowsOpening, marketOrderProblem, tradingPolicyProblems } from "./risk.js";
 import { closedPositionCaption, createClosedPositionShareCard } from "./share-card.js";
 import type { Market, PositionView, Side } from "./types.js";
 
@@ -276,12 +276,13 @@ export function createGuardianBot(config: Config, db: Database) {
       const { user, account, client } = await selectedAccount(ctx);
       if (user.lockedUntil && user.lockedUntil.getTime() > Date.now()) throw new Error("Trading is locked until the next New York trading day.");
       const [policy, markets] = await Promise.all([client.getTradingPolicy(account.id), client.listMarkets()]);
-      const problems = user.guardianMode === "enforce"
-        ? guardAccount(account, policy, user.riskUsd, user.maxRiskUsd, user.maxLossRoomUsagePercent)
-        : [];
-      if (problems.length) return void (await ctx.reply(`🛑 Trade blocked\n\n${problems.map((item) => `• ${item}`).join("\n")}`));
       const market = findMarket(markets, symbol);
       if (!market) throw new Error(`${symbol} market is not currently available.`);
+      const problems = tradingPolicyProblems(policy, market);
+      if (user.guardianMode === "enforce") {
+        problems.push(...guardAccount(account, {}, user.riskUsd, user.maxRiskUsd, user.maxLossRoomUsagePercent));
+      }
+      if (problems.length) return void (await ctx.reply(`🛑 Trade blocked\n\n${problems.map((item) => `• ${item}`).join("\n")}`));
       const initialQuote = await client.getQuote(market.id);
       const size = calculateSize(user.riskUsd, initialQuote.mid, user.stopPercent, market);
       const quote = await client.getQuote(market.id, side, size);
@@ -309,18 +310,21 @@ export function createGuardianBot(config: Config, db: Database) {
     if (!ticket) return void (await ctx.answerCallbackQuery({ text: "This quote expired or was already used.", show_alert: true }));
     const user = await ensureUser(ctx);
     if (user.lockedUntil && user.lockedUntil.getTime() > Date.now()) return void (await ctx.answerCallbackQuery({ text: "Trading is locked.", show_alert: true }));
-    await ctx.answerCallbackQuery({ text: config.DRY_RUN ? "Dry run complete." : "Submitting protected order…" });
+    await ctx.answerCallbackQuery({ text: "Checking protected order…" });
     await ctx.editMessageReplyMarkup({ reply_markup: undefined }).catch(() => undefined);
-    if (config.DRY_RUN) {
-      await db.recordTradeExecution({ ticketId: ticket.id, telegramId: user.telegramId, accountId: ticket.accountId, symbol: ticket.symbol, side: ticket.side, notionalUsd: ticket.estimatedNotional, dryRun: true, status: "validated" });
-      return void (await ctx.reply(`✅ DRY RUN passed\n\n${ticket.symbol} ${ticket.side.toUpperCase()} validated. No order was sent.`));
-    }
     try {
       const { client } = await session(ctx);
-      const market = (await client.listMarkets()).find(item => item.id === ticket.marketId);
+      const [policy, markets] = await Promise.all([client.getTradingPolicy(ticket.accountId), client.listMarkets()]);
+      const market = markets.find(item => item.id === ticket.marketId);
       if (!market) throw new Error("This market is no longer available.");
+      const problems = tradingPolicyProblems(policy, market);
+      if (problems.length) throw new Error(problems.join(" "));
       const marketProblem = marketOrderProblem(market, ticket.size, ticket.estimatedNotional);
       if (marketProblem) throw new Error(marketProblem);
+      if (config.DRY_RUN) {
+        await db.recordTradeExecution({ ticketId: ticket.id, telegramId: user.telegramId, accountId: ticket.accountId, symbol: ticket.symbol, side: ticket.side, notionalUsd: ticket.estimatedNotional, dryRun: true, status: "validated" });
+        return void (await ctx.reply(`✅ DRY RUN passed\n\n${ticket.symbol} ${ticket.side.toUpperCase()} validated. No order was sent.`));
+      }
       const result = await client.placeProtectedMarketOrder({
         accountId: ticket.accountId, marketId: ticket.marketId, side: ticket.side, size: ticket.size,
         expectedPrice: ticket.expectedPrice, leverage: ticket.leverage, stopLossPrice: ticket.stopLossPrice,

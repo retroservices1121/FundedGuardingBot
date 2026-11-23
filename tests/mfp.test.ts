@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { buildQuotePath, isActiveAccount, MfpClient, normalizeMarkets, orderPrice, orderRejectionReason, positionExitOrders } from "../src/mfp.js";
+import { buildQuotePath, isActiveAccount, MfpClient, mfpRejectionMessage, normalizeMarkets, orderPrice, orderRejectionReason, positionExitOrders } from "../src/mfp.js";
 import { submitOrder } from "../src/mobile-order.js";
 import { withinMobileWriteDeadline } from "../src/mobile-write-deadline.js";
 
@@ -13,6 +13,21 @@ const orderInput = {
   accountId: "account", marketId: "gold", side: "buy" as const, size: 1, expectedPrice: 4_000,
   leverage: 2, stopLossPrice: 3_980, takeProfitPrice: 4_040, clientOrderId: "guardian-t", idempotencyKey: "entry-key",
 };
+
+describe("plain MyFundedPerps rejection messages", () => {
+  it.each([
+    ["The order must be larger.", "The order must be larger."],
+    ["Rejected for sample-key.", "MyFundedPerps rejected the request. Check your account and the request details."],
+    ["Request rejected. Authorization: Bearer sample-value", "MyFundedPerps rejected the request. Check your account and the request details."],
+  ])("filters the upstream rejection before displaying it", async (message, expected) => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json({
+      error: { message, details: [{ field: "client_order_id", issue: "internal validation detail" }] },
+    }, { status: 422 })));
+    const client = new MfpClient("https://example.test", "sample-key");
+    const publicMessage = await client.listAccounts().then(() => undefined, mfpRejectionMessage);
+    expect(publicMessage).toBe(expected);
+  });
+});
 
 describe("market response normalization", () => {
   it("maps the documented market_id field to the internal id", () => {

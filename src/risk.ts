@@ -341,7 +341,13 @@ export function buildTicket(input: {
   const estimatedNotional = input.quote.estimated_notional ?? size * entry;
   const problem = marketOrderProblem(input.market, size, estimatedNotional);
   if (problem) throw new RiskSizingError(problem);
-  const stopDistance = input.size === undefined ? entry * (input.stopPercent / 100) : input.riskUsd / size;
+  const requestedStopDistance = entry * (input.stopPercent / 100);
+  const stopDistance = input.size === undefined ? requestedStopDistance : input.riskUsd / size;
+  const stopRatio = stopDistance / requestedStopDistance;
+  // Allow for floating-point noise at the 10% boundary.
+  if (Math.abs(stopRatio - 1) > 0.1 + Number.EPSILON) {
+    throw new RiskSizingError("The available order size and entry price would move your stop loss more than 10% from the distance you chose. Adjust your risk amount or stop distance and review again.");
+  }
   const direction = input.side === "buy" ? 1 : -1;
   const stopLossPrice = entry - direction * stopDistance;
   const takeProfitPrice = entry + direction * stopDistance * input.rewardRisk;
