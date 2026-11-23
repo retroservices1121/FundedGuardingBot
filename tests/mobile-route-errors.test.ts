@@ -98,6 +98,7 @@ describe('mobile route errors', () => {
     vi.mocked(MfpClient.prototype.listMarkets).mockResolvedValue([
       {id:position.market_id,trading_enabled:true,available:false},
       {id:'paused',trading_enabled:false,available:true},
+      {id:'reduce-only',trading_enabled:true,reduce_only:true},
     ]);
     const response = await apiFetch(base + 'markets',{headers:{Authorization:'Bearer test-session'}});
     expect(response.status).toBe(200);
@@ -182,9 +183,13 @@ describe('mobile route errors', () => {
     [new DOMException('Timed out','TimeoutError'),504],
   ])('locks protection after a transport failure and never resends the claimed edit', async (error, expectedStatus) => {
     vi.spyOn(MobileAuth.prototype,'saveClose').mockImplementation(async (_token,ticket) => {
-      vi.spyOn(MobileAuth.prototype,'claimClose').mockResolvedValueOnce(ticket).mockResolvedValue(undefined);
+      const record = {payload:ticket,submitted_at:null as Date | null};
+      vi.spyOn(MobileAuth.prototype,'closeTicketResult').mockResolvedValue(record);
+      vi.spyOn(MobileAuth.prototype,'claimClose').mockImplementationOnce(async () => {
+        record.submitted_at = new Date();
+        return ticket;
+      });
     });
-    vi.spyOn(MobileAuth.prototype,'closeTicketSubmitted').mockResolvedValue(true);
     const quote = await post('protection/quote',edit);
     expect(quote.status).toBe(200);
     const {ticket} = await quote.json();

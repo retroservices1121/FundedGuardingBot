@@ -45,6 +45,7 @@ export interface Market {
   category?: string;
   available?: boolean;
   trading_enabled?: boolean;
+  reduce_only?: boolean;
   size_step?: number;
   size_decimals?: number;
   min_size?: number;

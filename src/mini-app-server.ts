@@ -7,6 +7,7 @@ import { closeSize, MobileActivity } from "./mobile-activity.js";
 import { MobileTrading } from "./mobile-trading.js";
 import { MobileAuth } from "./mobile-auth.js";
 import { MobileSessionError, MobileValidationError, MobileWriteUncertainError } from "./mobile-errors.js";
+import { withinMobileWriteDeadline } from "./mobile-write-deadline.js";
 import { randomUUID } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { readFile } from "node:fs/promises";
@@ -72,9 +73,9 @@ function mobileTicketId(input: Record<string, unknown>, message: string) {
   return input.ticketId;
 }
 
-async function mobileOperation(response: ServerResponse, write: boolean, run: () => Promise<unknown>) {
+async function mobileOperation(response: ServerResponse, write: boolean, run: () => Promise<unknown>, checkOnly = false) {
   try {
-    return json(response, 200, await run());
+    return json(response, 200, await (write && !checkOnly ? withinMobileWriteDeadline(run) : run()));
   } catch (error) {
     if (error instanceof MobileSessionError) throw error;
     if (error instanceof MobileValidationError || error instanceof RiskSizingError) {
@@ -708,10 +709,11 @@ export function startMiniAppServer(config: Config, db: Database) {
             return await mobileOperation(response, false, async () => mobileActivity.quoteClose(token, await mobileBody(request)));
           }
           if (["/api/mobile/auth/close/confirm","/api/mobile/auth/close/check"].includes(url.pathname) && request.method === "POST") {
+            const checkOnly = url.pathname.endsWith("/check");
             return await mobileOperation(response, true, async () => {
               const input = await mobileBody(request);
-              return mobileActivity.confirmClose(token, mobileTicketId(input, "Review a close first."), url.pathname.endsWith("/check"));
-            });
+              return mobileActivity.confirmClose(token, mobileTicketId(input, "Review a close first."), checkOnly);
+            }, checkOnly);
           }
           if (url.pathname === "/api/mobile/auth/trade/quick" && request.method === "POST") {
             return await mobileOperation(response, true, async () => mobileTrading.quick(token, await mobileBody(request)));
@@ -720,10 +722,11 @@ export function startMiniAppServer(config: Config, db: Database) {
             return await mobileOperation(response, false, async () => mobileTrading.quote(token, await mobileBody(request)));
           }
           if (["/api/mobile/auth/trade/confirm","/api/mobile/auth/trade/check"].includes(url.pathname) && request.method === "POST") {
+            const checkOnly = url.pathname.endsWith("/check");
             return await mobileOperation(response, true, async () => {
               const input = await mobileBody(request);
-              return mobileTrading.confirm(token, mobileTicketId(input, "Review a trade first."), url.pathname.endsWith("/check"));
-            });
+              return mobileTrading.confirm(token, mobileTicketId(input, "Review a trade first."), checkOnly);
+            }, checkOnly);
           }
           if (url.pathname === "/api/mobile/auth/markets" && request.method === "GET") {
             await mobileAuth.user(token);

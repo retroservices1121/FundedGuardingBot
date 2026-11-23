@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { ChallengeAccount, Market, Position, Quote, Side, TradingPolicy, WorkingOrder } from "./types.js";
+import { mobileWriteSignal } from "./mobile-write-deadline.js";
 
 interface ApiEnvelope<T> {
   data: T;
@@ -103,7 +104,10 @@ export class MfpClient {
   ) {}
 
   private async request<T>(path: string, init: RequestInit = {}, allowBareList = false): Promise<T> {
-    const signal = AbortSignal.timeout(12_000);
+    const deadline = mobileWriteSignal();
+    if (deadline?.aborted) throw new MfpTransportError(true);
+    const requestTimeout = AbortSignal.timeout(12_000);
+    const signal = deadline ? AbortSignal.any([deadline, requestTimeout]) : requestTimeout;
     const response = await fetch(`${this.baseUrl}${path}`, {
       ...init,
       headers: {
@@ -156,6 +160,7 @@ export class MfpClient {
   }
 
   private async orderWrite(path: string, init: RequestInit) {
+    const deadline = mobileWriteSignal();
     let ambiguous: MfpError | undefined;
     for (let attempt = 0; ; attempt++) {
       try {
@@ -174,7 +179,16 @@ export class MfpClient {
         const delay = Math.max(Number.isNaN(wait) ? 0 : wait, 200 * 2 ** attempt) + Math.random() * 100;
         // Let the caller reconcile if the requested pause exceeds our retry budget.
         if (delay > 5_000) throw ambiguous ?? error;
-        await new Promise(resolve => setTimeout(resolve, delay));
+        await new Promise<void>(resolve => {
+          const finish = () => {
+            clearTimeout(timer);
+            deadline?.removeEventListener("abort", finish);
+            resolve();
+          };
+          const timer = setTimeout(finish, delay);
+          deadline?.addEventListener("abort", finish, { once: true });
+          if (deadline?.aborted) finish();
+        });
       }
     }
   }
@@ -304,7 +318,7 @@ export class MfpClient {
       { kind: "place", group: "tp", execution_type: "market", price: takeProfitPrice, size: position.size, oco_pair_with_operation_index: slIndex },
       { kind: "place", group: "sl", execution_type: "market", price: stopLossPrice, size: position.size, oco_pair_with_operation_index: tpIndex },
     );
-    return this.request<Record<string, unknown>>(`/v1/positions/${encodeURIComponent(position.id)}/exit-orders`, {
+    return this.orderWrite(`/v1/positions/${encodeURIComponent(position.id)}/exit-orders`, {
       method: "PUT",
       headers: { "Idempotency-Key": idempotencyKey },
       body: JSON.stringify({ expected_position_size: position.size, expected_orders: expected, operations }),

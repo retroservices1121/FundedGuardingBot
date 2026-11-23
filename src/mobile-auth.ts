@@ -315,7 +315,7 @@ export class MobileAuth {
   async claimClose(token: string, id: string, protection = false) {
     if (!protection) return this.claimMarketTicket('mobile_close_tickets',token,id);
     const user = await this.user(token);
-    const result = await this.db.pool.query(`UPDATE mobile_close_tickets SET submitted_at=NOW() WHERE id=$1 AND identity_id=$2 AND payload->>'kind'='protection' AND submitted_at IS NULL AND expires_at>NOW() RETURNING payload`,[id,user.id]);
+    const result = await this.db.pool.query(`UPDATE mobile_close_tickets SET submitted_at=NOW() WHERE id=$1 AND identity_id=$2 AND payload->>'kind'='protection' AND submitted_at IS NULL AND result IS NULL AND expires_at>NOW() RETURNING payload`,[id,user.id]);
     return result.rows[0]?.payload;
   }
   async closeTicketResult(token: string, id: string) {
@@ -325,11 +325,6 @@ export class MobileAuth {
   }
   async saveCloseResult(id: string, result: unknown, client: Pick<PoolClient, 'query'> = this.db.pool) {
     await client.query('UPDATE mobile_close_tickets SET result=$2 WHERE id=$1 AND result IS NULL',[id,JSON.stringify(result)]);
-  }
-  async closeTicketSubmitted(token: string, id: string) {
-    const user = await this.user(token);
-    const result = await this.db.pool.query(`SELECT submitted_at FROM mobile_close_tickets WHERE id=$1 AND identity_id=$2`, [id,user.id]);
-    return Boolean(result.rows[0]?.submitted_at);
   }
   async logout(token: string) { await this.db.pool.query(`DELETE FROM mobile_sessions WHERE token_hash=$1`, [hash(token)]); }
   async delete(token: string) {

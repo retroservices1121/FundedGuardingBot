@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildQuotePath, isActiveAccount, MfpClient, normalizeMarkets, orderPrice, orderRejectionReason, positionExitOrders } from "../src/mfp.js";
+import { submitOrder } from "../src/mobile-order.js";
+import { withinMobileWriteDeadline } from "../src/mobile-write-deadline.js";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -182,6 +184,76 @@ describe("order write recovery", () => {
       expect(init.headers["Idempotency-Key"]).toBe("close-key");
       expect(JSON.parse(init.body)).toEqual({client_order_id:"guardian-close-close-key",expected_price:100,size:0.25});
     }
+  });
+
+  it("honors Retry-After and keeps the full exit edit and key identical", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(Math, "random").mockReturnValue(0);
+    const request = vi.fn()
+      .mockResolvedValueOnce(Response.json({}, { status: 503, headers: { "Retry-After": "2" } }))
+      .mockResolvedValueOnce(Response.json({ data: { status: "updated" } }));
+    vi.stubGlobal("fetch", request);
+    const position = { id: "p1", market_id: "gold", size: 1 } as never;
+    const key = "00000000-0000-4000-8000-000000000001";
+    const edit = client.replacePositionExits(position, [], 110, 95, key);
+    await vi.advanceTimersByTimeAsync(1_999);
+    expect(request).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(edit).resolves.toEqual({ status: "updated" });
+    expect(request).toHaveBeenCalledTimes(2);
+    for (const [path, init] of request.mock.calls) {
+      expect(path).toBe("https://example.test/v1/positions/p1/exit-orders");
+      expect(init).toMatchObject({ method: "PUT", headers: { "Idempotency-Key": key }, body: request.mock.calls[0]![1].body });
+    }
+  });
+
+  it("shares the mobile write deadline with validation, retry waits and reconciliation", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(Math, "random").mockReturnValue(0);
+    const replyAfter = (ms: number, response: Response) => () =>
+      new Promise<Response>(resolve => setTimeout(() => resolve(response), ms));
+    let lookupSignal: AbortSignal | undefined;
+    const request = vi.fn()
+      .mockImplementationOnce(replyAfter(11_000, Response.json({ data: { id: "account" } })))
+      .mockImplementationOnce(replyAfter(11_000, Response.json({}, { status: 503, headers: { "Retry-After": "4" } })))
+      .mockImplementationOnce(replyAfter(11_000, Response.json({}, { status: 503 })))
+      .mockResolvedValueOnce(Response.json({}, { status: 503 }))
+      .mockImplementationOnce((_url, { signal }: RequestInit) => new Promise((_resolve, reject) => {
+        lookupSignal = signal ?? undefined;
+        signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
+      }));
+    vi.stubGlobal("fetch", request);
+    const result = withinMobileWriteDeadline(async () => {
+      await client.getAccount(orderInput.accountId);
+      return submitOrder(client, orderInput.clientOrderId, orderInput.accountId, () => client.placeProtectedMarketOrder(orderInput));
+    });
+    const rejected = expect(result).rejects.toThrow("Check MyFundedPerps");
+    await vi.advanceTimersByTimeAsync(39_999);
+    expect(request).toHaveBeenCalledTimes(5);
+    expect(request.mock.calls[4]![0]).toContain("client_order_id=");
+    expect(lookupSignal?.aborted).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    await rejected;
+    expect(lookupSignal?.aborted).toBe(true);
+    expect(request).toHaveBeenCalledTimes(5);
+  });
+
+  it("never starts a mobile order after the deadline even if validation finishes late", async () => {
+    vi.useFakeTimers();
+    const request = vi.fn();
+    vi.stubGlobal("fetch", request);
+    let lateOrder: Promise<unknown> | undefined;
+    const result = withinMobileWriteDeadline(async () => {
+      await new Promise(resolve => setTimeout(resolve, 41_000));
+      lateOrder = client.placeProtectedMarketOrder(orderInput).catch(error => error);
+      return lateOrder;
+    });
+    const rejected = expect(result).rejects.toThrow("Check MyFundedPerps");
+    await vi.advanceTimersByTimeAsync(40_000);
+    await rejected;
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(await lateOrder).toMatchObject({ timedOut: true });
+    expect(request).not.toHaveBeenCalled();
   });
 
   it.each(["create","close"])("preserves the rate limit after every %s attempt returns 429", async action => {

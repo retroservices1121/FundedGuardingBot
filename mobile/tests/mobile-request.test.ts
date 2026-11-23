@@ -61,16 +61,27 @@ describe('mobile requests', () => {
     await expect(request('dashboard')).rejects.toThrow('Could not reach Guardian. Check your connection and try again.');
   });
 
-  it.each(['dashboard', 'trade/confirm'])('handles timeouts without retrying %s', async path => {
+  it.each([
+    ['dashboard', 'GET', 15_000],
+    ['trade/check', 'POST', 15_000],
+    ['close/check', 'POST', 15_000],
+    ['trade/confirm', 'POST', 60_000],
+    ['trade/quick', 'POST', 60_000],
+    ['close/confirm', 'POST', 60_000],
+    ['protection/confirm', 'POST', 60_000],
+  ] as const)('handles timeouts without retrying %s', async (path, method, timeout) => {
     vi.useFakeTimers();
     const fetch = vi.fn((_url: string, {signal}: RequestInit) => new Promise((_resolve, reject) => {
       signal?.addEventListener('abort', () => reject(new Error('Request aborted')));
     }));
     vi.stubGlobal('fetch', fetch);
-    const check = expect(request(path, 'POST')).rejects.toThrow(path === 'dashboard'
+    const check = expect(request(path, method)).rejects.toThrow(path === 'dashboard'
       ? 'Guardian took too long to respond.' : TradeWriteUncertainError);
-    await vi.advanceTimersByTimeAsync(15000);
+    await vi.advanceTimersByTimeAsync(timeout - 1);
+    expect(fetch.mock.calls[0]?.[1].signal?.aborted).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
     await check;
+    expect(fetch.mock.calls[0]?.[1].signal?.aborted).toBe(true);
     expect(fetch).toHaveBeenCalledTimes(1);
   });
 

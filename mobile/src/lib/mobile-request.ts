@@ -21,9 +21,10 @@ export function createMobileRequest(apiUrl?: string) {
       if (typeof __DEV__ !== 'undefined' && __DEV__) console.warn('Guardian server address is missing or invalid.');
       throw new ScreenError(serverUnavailableMessage);
     }
-    const trade = isTradeWrite(path, method) || isTradeCheck(path, method);
+    const write = isTradeWrite(path, method);
+    const trade = write || isTradeCheck(path, method);
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 15000);
+    const timer = setTimeout(() => controller.abort(), write ? 60_000 : 15_000);
     let ok: boolean;
     let status: number | undefined;
     let body: string;

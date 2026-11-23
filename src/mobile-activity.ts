@@ -7,6 +7,7 @@ import { closeClientOrderId, MfpClient, MfpError, positionExitOrders } from './m
 import { SecretBox } from './crypto.js';
 import type { Config } from './config.js';
 import { mobileOrderHosts as hosts, orderRequestRejected, submitOrder } from './mobile-order.js';
+import { mobileWriteSignal } from './mobile-write-deadline.js';
 import { roundMarketSize } from './risk.js';
 export function closeSize(size:number,percent:number,market?:Market){
   if(![25,50,75,100].includes(percent)||!Number.isFinite(size)||size<=0)throw new MobileValidationError('Choose a valid close percentage for an open position.');
@@ -73,6 +74,7 @@ export class MobileActivity {
    if(Date.now()>=ticket.expiresAt)throw new MobileValidationError('Close quote expired. Review again.');
    if(this.config.DRY_RUN){const result={dryRun:true,status:'validated'};await this.auth.saveCloseResult(id,result);return result;}
    return await this.auth.withTicketWrite(id,true,connection.environment,async locked=>{
+    mobileWriteSignal()?.throwIfAborted();
     if(Date.now()>=ticket.expiresAt)throw new MobileValidationError('Close quote expired. Review again.');
     submitted=true;
     const result=await submitOrder(client,closeClientOrderId(ticket.id),ticket.accountId,()=>client.closePosition(position.id,ticket.size,quote.mid,ticket.id));
@@ -108,29 +110,54 @@ export class MobileActivity {
   const takeProfitPrice=Number(input.takeProfitPrice),stopLossPrice=Number(input.stopLossPrice);
   const quote=await client.getQuote(position.market_id);
   validateProtection(position,quote.mid,takeProfitPrice,stopLossPrice);
-  const ticket={id:randomUUID(),kind:'protection' as const,expectedOrders,accountId:connection.selected_account_id,positionId:position.id,originalSize:position.size,takeProfitPrice,stopLossPrice,expiresAt:Date.now()+this.config.CONFIRMATION_TTL_SECONDS*1000};
+  const ticket={id:randomUUID(),kind:'protection' as const,expectedOrders,accountId:connection.selected_account_id,environment:connection.environment,positionId:position.id,originalSize:position.size,takeProfitPrice,stopLossPrice,expiresAt:Date.now()+this.config.CONFIRMATION_TTL_SECONDS*1000};
   await this.auth.saveClose(token,ticket);return {ticket,dryRun:this.config.DRY_RUN};
  }
  async confirmProtection(token:string,id:string){
+  const previous=await this.auth.closeTicketResult(token,id);
+  const savedResult=(record:typeof previous)=>{
+   if(!record)throw new MobileValidationError('Edit quote expired. Review again.');
+   if(record.payload.kind!=='protection')throw new MobileValidationError('This is not an exit edit quote.');
+   if(record.result?.status==='not_submitted')throw new MobileValidationError('This edit was not sent. Review a new edit quote.');
+   if(record.result)return record.result;
+   if(record.submitted_at)throw new MobileWriteUncertainError('This edit was already submitted.');
+  };
+  const saved=savedResult(previous);
+  if(saved)return saved;
+  const ticket=previous.payload;
+  if(Date.now()>=ticket.expiresAt)throw new MobileValidationError('Edit quote expired. Review again.');
   const {connection,client}=await this.session(token);
   if(connection.environment==='live'&&!this.config.ALLOW_LIVE_TRADING)throw new MobileValidationError('Live account operations are disabled.');
-  const ticket=await this.auth.claimClose(token,id,true);
-  if(!ticket){
-   if(await this.auth.closeTicketSubmitted(token,id))throw new MobileWriteUncertainError('This edit was already submitted.');
-   throw new MobileValidationError('Edit quote expired. Review again.');
-  }
-  if(ticket.kind!=='protection')throw new MobileValidationError('This is not an exit edit quote.');
-  if(ticket.accountId!==connection.selected_account_id)throw new MobileValidationError('Account changed. Review again.');
+  if(ticket.accountId!==connection.selected_account_id||(ticket.environment&&connection.environment!==ticket.environment))throw new MobileValidationError('Account changed. Review again.');
   const [positions,orders]=await Promise.all([client.listOpenPositions(ticket.accountId),client.listWorkingOrders(ticket.accountId)]);
   const position=positions.find(p=>p.id===ticket.positionId);
   if(!position||position.size!==ticket.originalSize)throw new MobileValidationError('Position size changed. Review again.');
   if(JSON.stringify(exitSnapshot(positionExitOrders(orders,position)))!==JSON.stringify(ticket.expectedOrders))throw new MobileValidationError('Working exits changed. Refresh and review again.');
   const quote=await client.getQuote(position.market_id);
   validateProtection(position,quote.mid,ticket.takeProfitPrice,ticket.stopLossPrice);
-  if(Date.now()>=ticket.expiresAt)throw new MobileValidationError('Edit quote expired. Review again.');
-  if(this.config.DRY_RUN)return {dryRun:true,status:'validated'};
-  const result=await client.replacePositionExits(position,orders,ticket.takeProfitPrice,ticket.stopLossPrice,ticket.id);
-  return {dryRun:false,status:String(result.status??'submitted')};
+  mobileWriteSignal()?.throwIfAborted();
+  if(!await this.auth.claimClose(token,id,true)){
+   const result=savedResult(await this.auth.closeTicketResult(token,id));
+   if(result)return result;
+   throw new MobileValidationError('Edit quote expired. Review again.');
+  }
+  let submitted=false;
+  try{
+   mobileWriteSignal()?.throwIfAborted();
+   if(Date.now()>=ticket.expiresAt)throw new MobileValidationError('Edit quote expired. Review again.');
+   let result={dryRun:true,status:'validated'};
+   if(!this.config.DRY_RUN){
+    submitted=true;
+    const response=await client.replacePositionExits(position,orders,ticket.takeProfitPrice,ticket.stopLossPrice,ticket.id);
+    result={dryRun:false,status:String(response.status??'submitted')};
+   }
+   await this.auth.saveCloseResult(id,result);
+   return result;
+  }catch(error){
+   if(!submitted||orderRequestRejected(error))await this.auth.saveCloseResult(id,{status:'not_submitted'});
+   if(submitted&&error instanceof MfpError&&error.status===429)throw new MobileValidationError('MyFundedPerps is receiving too many requests. This edit was not sent. Try again shortly.');
+   throw error;
+  }
  }
 
 }

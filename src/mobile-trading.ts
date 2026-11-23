@@ -9,6 +9,7 @@ import { SecretBox } from './crypto.js';
 import { buildTicket, calculateSize, marketAllowsOpening, platformRuleCheck, tradingPolicyProblems } from './risk.js';
 import type { PersonalGuards } from './mobile-guards.js';
 import { entryClientOrderId, mobileOrderHosts as hosts, orderRequestRejected, submitOrder } from './mobile-order.js';
+import { mobileWriteSignal } from './mobile-write-deadline.js';
 
 function blockTrade(problems:string[]){
   if(problems.length)throw new MobileValidationError(`Trade blocked. ${problems.join(' ')}`);
@@ -130,6 +131,7 @@ export class MobileTrading {
       if(this.config.DRY_RUN){const result={dryRun:true,status:'validated'};await this.auth.saveTicketResult(id,result);return result;}
       const clientOrderId=entryClientOrderId(ticket.id);
       return await this.auth.withTicketWrite(id,false,connection.environment,async locked=>{
+        mobileWriteSignal()?.throwIfAborted();
         if (Date.now() >= ticket.expiresAt) throw new MobileValidationError(quick?'Quote expired. Tap the saved amount again.':'Quote expired. Review a new quote.');
         submitted=true;
         const result=await submitOrder(client,clientOrderId,ticket.accountId,()=>client.placeProtectedMarketOrder({accountId:ticket.accountId,marketId:ticket.marketId,side:ticket.side,size:ticket.size,expectedPrice:ticket.expectedPrice,leverage:ticket.leverage,stopLossPrice:ticket.stopLossPrice,takeProfitPrice:ticket.takeProfitPrice,replaceOverlappingExits:replacement?true:undefined,clientOrderId,idempotencyKey:ticket.id}));

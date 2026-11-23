@@ -268,7 +268,7 @@ export function platformRuleCheck(input: {
 export class RiskSizingError extends Error {}
 
 export function marketAllowsOpening(market: Market): boolean {
-  return market.trading_enabled ?? (market.available !== false);
+  return market.reduce_only !== true && (market.trading_enabled ?? market.available !== false);
 }
 
 export function roundMarketSize(size: number, market?: Market): number | undefined {
