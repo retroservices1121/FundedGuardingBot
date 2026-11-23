@@ -9,7 +9,13 @@
     "ios": {
       "supportsTablet": true,
       "usesAppleSignIn": true,
-      "bundleIdentifier": "com.retroservices1121.guardian"
+      "bundleIdentifier": "com.retroservices1121.guardian",
+      "infoPlist": {
+        "NSPhotoLibraryAddUsageDescription": "Funded Guardian saves your share images to your photo library when you tap Save Image."
+      },
+      "config": {
+        "usesNonExemptEncryption": false
+      }
     },
     "android": {
       "adaptiveIcon": {
