@@ -6,13 +6,14 @@ import { ActivityIndicator, Alert, AppState, Pressable, RefreshControl, ScrollVi
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useIsFocused } from 'expo-router/react-navigation';
 import { useSession } from '../../../App';
+import { fresherActivityTick, latestActivityTick, type ActivityTick } from '../../lib/activity-prices';
 type Position={id:string;market_id:string;symbol:string;coin:string;provider:string;side:'long'|'short';size:number;entry_price:number;leverage:number;markPrice?:number;estimatedCloseFee?:number;estimatedUnrealizedPnl?:number;realized_pnl?:number;exit_price?:number;closed_at?:number;fees?:number};
 type Data={accountId:string;open:Position[];closed:Position[];updatedAt:string;refreshSeconds:number};
 type Quote={id:string;symbol:string;percent:number;size?:number;originalSize:number;expectedPrice:number;estimatedFee?:number;expiresAt:number};
 const money=(v?:number)=>typeof v==='number'&&Number.isFinite(v)?new Intl.NumberFormat('en-US',{style:'currency',currency:'USD',maximumFractionDigits:2}).format(v):'Unavailable';
 export default function Activity(){
  const {token,request,demo,writeState}=useSession(),focused=useIsFocused();
- const [data,setData]=useState<Data|null>(null),[tab,setTab]=useState<'open'|'closed'>('open'),[error,setError]=useState(''),[busy,setBusy]=useState(false),[action,setAction]=useState(false),[notice,setNotice]=useState(''),[feed,setFeed]=useState<Record<string,number>>({}),[live,setLive]=useState(false);
+ const [data,setData]=useState<Data|null>(null),[tab,setTab]=useState<'open'|'closed'>('open'),[error,setError]=useState(''),[busy,setBusy]=useState(false),[action,setAction]=useState(false),[notice,setNotice]=useState(''),[feed,setFeed]=useState<Record<string,ActivityTick>>({});
  const refresh=useRef<(()=>Promise<void>)|null>(null),pending=useRef(false);
  useEffect(()=>{
   if(!focused)return;let mounted=true,inFlight=false,timer:ReturnType<typeof setTimeout>|undefined;
@@ -25,16 +26,34 @@ export default function Activity(){
   if(demo||!focused||tab!=='open')return;
   const positions: {provider:string;coin:string}[]=JSON.parse(subscriptions);if(!positions.length)return;
   let stopped=false,socket:WebSocket|null=null,retry:ReturnType<typeof setTimeout>|undefined,flush:ReturnType<typeof setTimeout>|undefined;
-  const prices:Record<string,number>={},ranks:Record<string,number>={};
-  function connect(){if(stopped||AppState.currentState==='background')return;socket=new WebSocket('wss://api-stream.myfundedperpetuals.com/v1/market-data');
-   socket.onopen=()=>{let id=500;const groups=new Map<string,string[]>();for(const p of positions){if(!p.provider||!p.coin)continue;const symbols=groups.get(p.provider)??[];if(!symbols.includes(p.coin))symbols.push(p.coin);groups.set(p.provider,symbols);}for(const [provider,symbols]of groups)for(let i=0;i<symbols.length;i+=32)socket?.send(JSON.stringify({op:'sub',id:id++,channel:'ticks',payload:{symbols:symbols.slice(i,i+32),providers:[provider]}}));};
-   socket.onmessage=message=>{try{const frame=JSON.parse(String(message.data));let changed=false;for(const raw of frame.events??[]){const e=raw.tick??raw;if(!e.provider||!e.symbol||e.price==null||!Number.isFinite(Number(e.price)))continue;const key=`${String(e.provider).toLowerCase()}|${String(e.symbol).toUpperCase()}`,rank=({last:1,mid:2,mark:3} as Record<string,number>)[e.kind]??0;if(rank<(ranks[key]??0))continue;prices[key]=Number(e.price);ranks[key]=rank;changed=true;}
-    if(changed&&!flush)flush=setTimeout(()=>{if(!stopped){setFeed({...prices});setLive(true);}flush=undefined;},500);
-   }catch{/* Ignore malformed public frames. */}};
-   socket.onclose=()=>{socket=null;if(!stopped){setLive(false);retry=setTimeout(connect,3000);}};socket.onerror=()=>setLive(false);
+  function disconnect(){
+   if(flush)clearTimeout(flush);flush=undefined;
+   const current=socket;socket=null;
+   if(current&&current.readyState<WebSocket.CLOSING)current.close();
+   setFeed({});
   }
-  connect();const listener=AppState.addEventListener('change',state=>{if(state==='active'){if(!socket)connect();}else{if(retry)clearTimeout(retry);if(socket){socket.onclose=null;socket.close();socket=null;}setLive(false);}});
-  return()=>{stopped=true;listener.remove();if(retry)clearTimeout(retry);if(flush)clearTimeout(flush);socket?.close();};
+  function connect(){
+   if(stopped||socket||AppState.currentState==='background')return;
+   const current=socket=new WebSocket('wss://api-stream.myfundedperpetuals.com/v1/market-data'),prices:Record<string,ActivityTick>={};
+   current.onopen=()=>{if(socket!==current)return;let id=500;const groups=new Map<string,string[]>();for(const p of positions){if(!p.provider||!p.coin)continue;const symbols=groups.get(p.provider)??[];if(!symbols.includes(p.coin))symbols.push(p.coin);groups.set(p.provider,symbols);}for(const [provider,symbols]of groups)for(let i=0;i<symbols.length;i+=32)current.send(JSON.stringify({op:'sub',id:id++,channel:'ticks',payload:{symbols:symbols.slice(i,i+32),providers:[provider]}}));};
+   current.onmessage=message=>{
+    if(socket!==current)return;
+    try{
+     const frame=JSON.parse(String(message.data));let changed=false;
+     for(const raw of frame.events??[]){
+      const e=raw.tick??raw;if(!e.provider||!e.symbol)continue;
+      const key=`${String(e.provider).toLowerCase()}|${String(e.symbol).toUpperCase()}`,previous=prices[key],tick=latestActivityTick(previous,e);
+      if(!tick||tick===previous)continue;
+      prices[key]=tick;changed=true;
+     }
+     if(changed&&!flush)flush=setTimeout(()=>{if(socket===current)setFeed({...prices});flush=undefined;},500);
+    }catch{/* Ignore malformed public frames. */}
+   };
+   function reconnect(){if(socket!==current)return;disconnect();retry=setTimeout(connect,3000);}
+   current.onclose=reconnect;current.onerror=reconnect;
+  }
+  connect();const listener=AppState.addEventListener('change',state=>{if(retry)clearTimeout(retry);if(state==='active')connect();else disconnect();});
+  return()=>{stopped=true;listener.remove();if(retry)clearTimeout(retry);disconnect();};
  },[focused,tab,subscriptions,demo]);
  async function prepareClose(position:Position,percent:number){
   if(pending.current||writeState!=='ready')return;pending.current=true;setAction(true);setError('');setNotice('');
@@ -58,9 +77,12 @@ export default function Activity(){
   {!!notice&&<Text accessibilityRole="alert" style={styles.green}>{notice}</Text>}{!!error&&writeState!=='uncertain'&&<Text accessibilityRole="alert" style={styles.error}>{error}{data?' Showing last received data.':''}</Text>}
   {!data&&busy&&<ActivityIndicator color="#2dcc98"/>}
   {data&&!positions.length&&<Text style={styles.copy}>{tab==='open'?'No open positions on this account.':'No closed positions returned for this account.'}</Text>}
-  {positions.map(p=>{const mark=feed[`${p.provider?.toLowerCase()}|${p.coin?.toUpperCase()}`]??p.markPrice,pnl=tab==='closed'?p.realized_pnl:mark!==undefined?(mark-p.entry_price)*Math.abs(p.size)*(p.side==='long'?1:-1):p.estimatedUnrealizedPnl;return <View key={p.id} style={styles.card}>
+  {positions.map(p=>{
+   const tick=tab==='open'&&focused&&!demo&&data?fresherActivityTick(feed[`${p.provider?.toLowerCase()}|${p.coin?.toUpperCase()}`],data.updatedAt,p.markPrice!=null||p.estimatedUnrealizedPnl!=null):undefined;
+   const mark=tick?.price??p.markPrice,pnl=tab==='closed'?p.realized_pnl:mark!=null?(mark-p.entry_price)*Math.abs(p.size)*(p.side==='long'?1:-1):p.estimatedUnrealizedPnl;
+   return <View key={p.id} style={styles.card}>
    <Pressable accessibilityRole="button" accessibilityLabel={`Open ${p.symbol??p.coin} market chart`} disabled={tab!=='open'} onPress={()=>router.push({pathname:'/trade',params:{marketId:p.market_id}})}><View style={styles.row}><Text style={styles.symbol}>{p.symbol??p.coin}</Text><Text style={styles.copy}>{p.side.toUpperCase()} · {p.leverage}x</Text></View>{tab==='open'&&<Text style={styles.green}>View market chart ↗</Text>}<Text style={[styles.pnl,{color:pnl===undefined?'#a9bbb2':pnl>=0?'#71e6b8':'#ff9c9c'}]}>{money(pnl)}</Text></Pressable>
-   <Text style={styles.small}>{demo?'Sample P&L · Not actual performance':tab==='closed'?'MFP reported realized P&L':live?'Estimated P&L from live market prices':'Estimated P&L from last received price'}</Text>
+   <Text style={styles.small}>{demo?'Sample P&L · Not actual performance':tab==='closed'?'MFP reported realized P&L':`Estimated P&L from ${tick?'live market prices':'last account update'} · Excludes fees`}</Text>
    <View style={styles.row}><Text style={styles.copy}>Entry</Text><Text style={styles.value}>{money(p.entry_price)}</Text></View>
    <View style={styles.row}><Text style={styles.copy}>{tab==='open'?'Mark / mid':'Exit'}</Text><Text style={styles.value}>{money(tab==='open'?mark:p.exit_price)}</Text></View>
    <View style={styles.row}><Text style={styles.copy}>{tab==='open'?'Estimated close fee':'Reported fees'}</Text><Text style={styles.value}>{money(tab==='open'?p.estimatedCloseFee:p.fees)}</Text></View>
