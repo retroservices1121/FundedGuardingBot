@@ -74,6 +74,7 @@ export class MfpError extends Error {
     readonly code?: string,
     readonly retryAfter?: string | null,
     readonly details?: unknown,
+    readonly ruleId?: string,
   ) {
     super(message);
   }
@@ -113,7 +114,7 @@ export class MfpClient {
       return {};
     })) as {
       data?: T;
-      error?: { code?: string; message?: string; details?: unknown } | string;
+      error?: { code?: string; message?: string; details?: unknown; rule_id?: string } | string;
     };
     if (!response.ok) {
       const error = typeof payload?.error === "object" ? payload.error : undefined;
@@ -136,6 +137,7 @@ export class MfpClient {
         error?.code,
         response.headers.get("retry-after"),
         error?.details,
+        error?.rule_id,
       );
     }
     return (payload as ApiEnvelope<T>)?.data;
@@ -196,8 +198,9 @@ export class MfpClient {
     size: number;
     expectedPrice: number;
     leverage: number;
-    stopLossPrice: number;
-    takeProfitPrice: number;
+    stopLossPrice?: number;
+    takeProfitPrice?: number;
+    replaceOverlappingExits?: boolean;
     clientOrderId: string;
     idempotencyKey?: string;
   }) {
@@ -216,11 +219,13 @@ export class MfpClient {
         margin_mode: "cross",
         take_profit_price: input.takeProfitPrice,
         stop_loss_price: input.stopLossPrice,
+        ...((input.takeProfitPrice != null || input.stopLossPrice != null) && input.replaceOverlappingExits === true
+          ? { replace_overlapping_exits: true } : {}),
       }),
     });
     const status = String(result?.status ?? "").toLowerCase();
     if (["rejected", "failed", "denied"].includes(status)) {
-      throw new MfpError(orderRejectionReason(result) ?? "The order was rejected by the trading rules.", 422, typeof result.code === "string" ? result.code : undefined, null, result);
+      throw new MfpError(orderRejectionReason(result) ?? "The order was rejected by the trading rules.", 422, typeof result.code === "string" ? result.code : undefined, null, result, typeof result.rule_id === "string" ? result.rule_id : undefined);
     }
     return result;
   }

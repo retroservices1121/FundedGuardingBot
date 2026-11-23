@@ -83,6 +83,22 @@ describe('mobile route errors', () => {
     expect(await response.json()).toEqual({error:message,uncertain:false});
   });
 
+  it('returns a definite trade block when the policy changes after review', async () => {
+    vi.spyOn(MobileAuth.prototype,'saveTicket').mockImplementation(async (_token,ticket) => {
+      vi.spyOn(MobileAuth.prototype,'claimTicket').mockResolvedValue(ticket);
+      return true;
+    });
+    const quote = await post('trade/quote',{...trade,requestId:undefined});
+    expect(quote.status).toBe(200);
+    const {ticket} = await quote.json();
+    vi.mocked(MfpClient.prototype.getTradingPolicy).mockResolvedValue({payout_pending:true});
+    const send = vi.spyOn(MfpClient.prototype,'placeProtectedMarketOrder');
+    const response = await post('trade/confirm',{ticketId:ticket.id});
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({error:'Trade blocked. Trading is paused while your payout is pending.',uncertain:false});
+    expect(send).not.toHaveBeenCalled();
+  });
+
   it('uses 401 for an invalid session and 503 for a session lookup failure', async () => {
     pool.query.mockResolvedValueOnce({rows:[]});
     expect((await post('trade/quick',trade)).status).toBe(401);

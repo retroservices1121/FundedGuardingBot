@@ -1,17 +1,32 @@
 import { MobileValidationError, MobileWriteUncertainError } from './mobile-errors.js';
 import { guardWarnings } from "./mobile-guards.js";
-import type { Side } from './types.js';
+import type { Position, Side, TradeTicket } from './types.js';
 import { createHash, randomUUID } from 'node:crypto';
 import type { Config } from './config.js';
 import { MobileAuth } from './mobile-auth.js';
-import { MfpClient, isActiveAccount } from './mfp.js';
+import { MfpClient, MfpError, isActiveAccount, positionExitOrders } from './mfp.js';
 import { SecretBox } from './crypto.js';
-import { buildTicket, calculateSize, platformRuleCheck } from './risk.js';
+import { buildTicket, calculateSize, platformRuleCheck, tradingPolicyProblems } from './risk.js';
 import type { PersonalGuards } from './mobile-guards.js';
 import { orderRequestRejected, reconcileOrder, submitOrder } from './mobile-order.js';
 
 const hosts={live:'https://developers.myfundedperpetuals.com',sandbox:'https://sandbox.myfundedperpetuals.com'};
 const entryClientOrderId=(id:string)=>`guardian-native-${id}`;
+function blockTrade(problems:string[]){
+  if(problems.length)throw new MobileValidationError(`Trade blocked. ${problems.join(' ')}`);
+}
+async function exitReplacement(client:MfpClient,ticket:TradeTicket,positions:Position[]):Promise<TradeTicket['exitReplacement']>{
+  const position=positions.find(p=>p.market_id===ticket.marketId&&p.side===(ticket.side==='buy'?'long':'short'));
+  if(!position||(ticket.takeProfitPrice==null&&ticket.stopLossPrice==null))return;
+  const orders=await client.listWorkingOrders(ticket.accountId);
+  const orderIds=positionExitOrders(orders,position).filter(order=>{
+    const group=order.exit_group??order.group;
+    const takeProfit=group?group==='tp':['take_profit','take_market','take_limit'].includes(order.type);
+    const stopLoss=group?group==='sl':['stop_market','stop_limit'].includes(order.type);
+    return (takeProfit&&ticket.takeProfitPrice!=null)||(stopLoss&&ticket.stopLossPrice!=null);
+  }).map(order=>order.id).sort();
+  if(orderIds.length)return {positionId:position.id,orderIds};
+}
 function checkQuickPrefs(prefs:PersonalGuards|undefined,riskUsd:number){
   if(prefs?.quickTradeEnabled!==true)throw new MobileValidationError('Enable one-tap trading in Settings first.');
   if(!(prefs.quickAmounts??[10,50,100]).includes(riskUsd))throw new MobileValidationError('Choose one of your saved quick risk amounts.');
@@ -45,6 +60,7 @@ export class MobileTrading {
     if(!isActiveAccount(account))throw new MobileValidationError('Select an active account from Home.');
     const market=markets.find(m=>m.id===values.marketId&&m.available!==false);
     if(!market)throw new MobileValidationError('This market is currently unavailable.');
+    blockTrade(tradingPolicyProblems(policy,market));
     const first=await client.getQuote(market.id);
     if(!Number.isFinite(first.mid)||first.mid<=0)throw new MobileValidationError('A valid market price is unavailable.');
     const size=calculateSize(values.riskUsd,first.mid,values.stopPercent,market.size_precision??market.quantity_precision??6);
@@ -60,6 +76,11 @@ export class MobileTrading {
     ticket.estimatedNotional = quote.estimated_notional ?? size * ticket.expectedPrice;
     ticket.platformRules=platformRuleCheck({account,policy,market,ticket,openPositions:positions});
     if(ticket.size<=0||!Number.isFinite(ticket.size)||!Number.isFinite(ticket.expectedPrice)||ticket.stopLossPrice<=0||ticket.takeProfitPrice<=0)throw new MobileValidationError('These inputs produce invalid prices or size.');
+    const replacement=await exitReplacement(client,ticket,positions);
+    if(replacement){
+      if(input.reviewExitReplacement!==true)throw new MobileValidationError('This trade would replace your existing take profit or stop loss. Review it in the latest app or trade in MyFundedPerps.');
+      ticket.exitReplacement=replacement;
+    }
     ticket.platformRules.warnings.push(...guardWarnings(connection.personal_guards,account,ticket.riskUsd));
     const saved=quick ? await this.auth.saveTicket(token,ticket,true) : await this.auth.saveTicket(token,ticket);
     const stored=quick&&saved===false ? (await this.auth.ticketResult(token,id))?.payload : ticket;
@@ -78,7 +99,7 @@ export class MobileTrading {
   }
   async quick(token:string,input:Record<string,unknown>){
     const id=await this.quickId(token,input.requestId);
-    const {ticket}=await this.quickQuote(token,input,id);
+    const {ticket}=await this.quickQuote(token,{...input,reviewExitReplacement:false},id);
     const result=await this.confirm(token,id);
     return {...result,warnings:ticket.platformRules?.warnings??[]};
   }
@@ -109,15 +130,23 @@ export class MobileTrading {
       if(!market)throw new MobileValidationError('The market is no longer available.');
       guardWarnings(connection.personal_guards,account,ticket.riskUsd);
       const check=platformRuleCheck({account,policy,market,ticket,openPositions:positions});
-      if(check.problems.length)throw new MobileValidationError(check.problems.join(' '));
+      blockTrade(check.problems);
+      const replacement=await exitReplacement(client,ticket,positions);
+      const reviewed=ticket.exitReplacement;
+      if(replacement?.positionId!==reviewed?.positionId||JSON.stringify(replacement?.orderIds)!==JSON.stringify(reviewed?.orderIds)){
+        throw new MobileValidationError('The position or its exits changed. Review a new quote before trading.');
+      }
       if(this.config.DRY_RUN){const result={dryRun:true,status:'validated'};await this.auth.saveTicketResult(id,result);return result;}
       if (Date.now() >= ticket.expiresAt) throw new MobileValidationError(quick?'Quote expired. Tap the saved amount again.':'Quote expired. Review a new quote.');
       submitted=true;
       const clientOrderId=entryClientOrderId(ticket.id);
-      const result=await submitOrder(client,clientOrderId,ticket.accountId,()=>client.placeProtectedMarketOrder({accountId:ticket.accountId,marketId:ticket.marketId,side:ticket.side,size:ticket.size,expectedPrice:ticket.expectedPrice,leverage:ticket.leverage,stopLossPrice:ticket.stopLossPrice,takeProfitPrice:ticket.takeProfitPrice,clientOrderId,idempotencyKey:ticket.id}));
+      const result=await submitOrder(client,clientOrderId,ticket.accountId,()=>client.placeProtectedMarketOrder({accountId:ticket.accountId,marketId:ticket.marketId,side:ticket.side,size:ticket.size,expectedPrice:ticket.expectedPrice,leverage:ticket.leverage,stopLossPrice:ticket.stopLossPrice,takeProfitPrice:ticket.takeProfitPrice,replaceOverlappingExits:replacement?true:undefined,clientOrderId,idempotencyKey:ticket.id}));
       await this.auth.saveTicketResult(id,result);return result;
     }catch(e){
       if(!submitted||orderRequestRejected(e))await this.auth.saveTicketResult(id,{status:'not_submitted'});
+      if(e instanceof MfpError&&e.status===422&&e.ruleId==='exit-allocation'){
+        throw new MobileValidationError('MyFundedPerps could not replace the existing exits. Check the take profit and stop loss on the position, then review a new quote.');
+      }
       throw e;
     }
   }

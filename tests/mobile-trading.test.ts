@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { MobileTrading, tradeInput } from '../src/mobile-trading.js';
-import { MfpClient, MfpTransportError } from '../src/mfp.js';
+import { MfpClient, MfpError, MfpTransportError } from '../src/mfp.js';
 import { SecretBox } from '../src/crypto.js';
 import { loadConfig } from '../src/config.js';
-import type { TradeTicket } from '../src/types.js';
+import type { Position, TradeTicket, TradingPolicy, WorkingOrder } from '../src/types.js';
 const config=loadConfig({TELEGRAM_BOT_TOKEN:'test',DATABASE_URL:'postgres://localhost/test',ENCRYPTION_KEY:Buffer.alloc(32,1).toString('base64'),ALLOW_LIVE_TRADING:'true',DRY_RUN:'false'});
 const input={marketId:'binance|BTCUSDT',side:'buy',riskUsd:65,leverage:5,stopPercent:1,rewardRisk:2};
 const quickInput={...input,requestId:'quick-test-request-id-01'};
@@ -12,11 +12,17 @@ function mocks(){
  const auth={user:vi.fn().mockResolvedValue({id:'user-a'}),connection:vi.fn().mockResolvedValue({environment:'live',encrypted_api_key:new SecretBox(config.ENCRYPTION_KEY).encrypt('fp_live_test'),selected_account_id:'account-a'}),saveTicket:vi.fn(),claimTicket:vi.fn(),cancelUnclaimedTicket:vi.fn(),ticketResult:vi.fn(),saveTicketResult:vi.fn()};
  vi.spyOn(MfpClient.prototype,'getAccount').mockResolvedValue({id:'account-a',status:'active'});
  vi.spyOn(MfpClient.prototype,'getTradingPolicy').mockResolvedValue({});
- vi.spyOn(MfpClient.prototype,'listMarkets').mockResolvedValue([{id:'binance|BTCUSDT',symbol:'BTC',size_precision:3}]);
+ vi.spyOn(MfpClient.prototype,'listMarkets').mockResolvedValue([{id:'binance|BTCUSDT',symbol:'BTC',coin:'BTCUSDT',category:'crypto',size_precision:3}]);
  vi.spyOn(MfpClient.prototype,'listOpenPositions').mockResolvedValue([]);
  vi.spyOn(MfpClient.prototype,'getQuote').mockResolvedValue({bid:100,ask:101,mid:100,estimated_fill_price:101,estimated_fee:1});
  vi.spyOn(MfpClient.prototype,'findOrderByClientOrderId').mockResolvedValue(undefined);
  return {auth,trading:new MobileTrading(auth as never,config)};
+}
+function positionWithExit(side:Position['side']='long'){
+ vi.mocked(MfpClient.prototype.listOpenPositions).mockResolvedValue([{id:'position',market_id:input.marketId,side} as Position]);
+ return vi.spyOn(MfpClient.prototype,'listWorkingOrders').mockResolvedValue([
+  {id:'stop',position_id:'position',market_id:input.marketId,type:'stop_market',reduce_only:true} as WorkingOrder,
+ ]);
 }
 async function storedTickets(){
  const {auth,trading}=mocks();
@@ -72,6 +78,103 @@ describe('native trading',()=>{
   const send=vi.spyOn(MfpClient.prototype,'placeProtectedMarketOrder').mockResolvedValue({id:'order',status:'pending'});
   expect(await trading.confirm('session',ticket.id)).toMatchObject({status:'pending',dryRun:false});
   expect(send).toHaveBeenCalledWith(expect.objectContaining({idempotencyKey:ticket.id,size:ticket.size}));
+  expect(send.mock.calls[0]?.[0].replaceOverlappingExits).toBeUndefined();
+ });
+ it('previews replacement and submits a protected add only once',async()=>{
+  const {trading}=await storedTickets();
+  positionWithExit();
+  const {ticket}=await trading.quote('session',{...quickInput,reviewExitReplacement:true});
+  expect(ticket.exitReplacement).toEqual({positionId:'position',orderIds:['stop']});
+  // The database can return JSON object keys in a different order.
+  ticket.exitReplacement={orderIds:['stop'],positionId:'position'};
+  const send=vi.spyOn(MfpClient.prototype,'placeProtectedMarketOrder').mockResolvedValue({id:'order',status:'pending'});
+  await trading.quick('session',{requestId:quickInput.requestId});
+  await trading.quick('session',{requestId:quickInput.requestId});
+  expect(send).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({replaceOverlappingExits:true,idempotencyKey:ticket.id}));
+ });
+ it('does not replace exits without a replacement review',async()=>{
+  const {auth,trading}=await storedTickets();
+  positionWithExit();
+  const send=vi.spyOn(MfpClient.prototype,'placeProtectedMarketOrder');
+  await expect(trading.quote('session',input)).rejects.toThrow('would replace your existing');
+  await expect(trading.quick('session',{...quickInput,reviewExitReplacement:true})).rejects.toThrow('would replace your existing');
+  expect(auth.saveTicket).not.toHaveBeenCalled();
+  expect(send).not.toHaveBeenCalled();
+ });
+ it('does not replace exits on an opposite-side order',async()=>{
+  const {trading}=await storedTickets();
+  const orders=positionWithExit('short');
+  const {ticket}=await trading.quote('session',{...input,reviewExitReplacement:true});
+  const send=vi.spyOn(MfpClient.prototype,'placeProtectedMarketOrder').mockResolvedValue({id:'order',status:'pending'});
+  await trading.confirm('session',ticket.id);
+  expect(ticket.exitReplacement).toBeUndefined();
+  expect(send.mock.calls[0]?.[0].replaceOverlappingExits).toBeUndefined();
+  expect(orders).not.toHaveBeenCalled();
+ });
+ it('does not enable replacement when the add has no overlapping exit',async()=>{
+  const {trading}=await storedTickets();
+  positionWithExit().mockResolvedValue([
+   {id:'other-exit',position_id:'other-position',market_id:input.marketId,type:'stop_market',reduce_only:true} as WorkingOrder,
+   {id:'close',position_id:'position',market_id:input.marketId,type:'market',reduce_only:true} as WorkingOrder,
+  ]);
+  const {ticket}=await trading.quote('session',input);
+  const send=vi.spyOn(MfpClient.prototype,'placeProtectedMarketOrder').mockResolvedValue({id:'order',status:'pending'});
+  await trading.confirm('session',ticket.id);
+  expect(ticket.exitReplacement).toBeUndefined();
+  expect(send.mock.calls[0]?.[0].replaceOverlappingExits).toBeUndefined();
+ });
+ it('blocks confirmation when an exit appeared after the review',async()=>{
+  const {trading}=await storedTickets();
+  const {ticket}=await trading.quote('session',{...input,reviewExitReplacement:true});
+  positionWithExit();
+  const send=vi.spyOn(MfpClient.prototype,'placeProtectedMarketOrder');
+  await expect(trading.confirm('session',ticket.id)).rejects.toThrow('exits changed');
+  expect(send).not.toHaveBeenCalled();
+ });
+ it('explains an exit allocation rejection without resubmitting',async()=>{
+  const {trading}=await storedTickets();
+  positionWithExit();
+  const {ticket}=await trading.quote('session',{...input,reviewExitReplacement:true});
+  const send=vi.spyOn(MfpClient.prototype,'placeProtectedMarketOrder')
+   .mockRejectedValue(new MfpError('Rejected',422,'rule_violation',null,undefined,'exit-allocation'));
+  await expect(trading.confirm('session',ticket.id)).rejects.toThrow('could not replace the existing exits');
+  await expect(trading.confirm('session',ticket.id)).rejects.toThrow('order was not sent');
+  expect(send).toHaveBeenCalledTimes(1);
+ });
+ const blockedPolicies:Array<[TradingPolicy,string]>=[
+  [{manual_trading_blocked:true},'blocked from placing trades manually'],
+  [{opening_exposure_restricted:true},'cannot open or increase positions'],
+  [{payout_pending:true},'payout is pending'],
+  [{copy_follower_locked:true},'copy trading setup'],
+  [{copy_scope_blocked:true},'copy trading setup'],
+  [{restriction:{restriction:'reduce_only'}},'can only reduce or close'],
+  [{competition:{opening_exposure_restricted:true}},'competition account cannot open or increase positions'],
+  [{competition:{market_allowlist:['ETH','bybit | BTCUSDT']}},'not available in your competition'],
+  [{trading_halt:{platform:true}},'has paused opening and increasing positions'],
+  [{trading_halt:{categories:['Crypto']}},'positions in this market'],
+ ];
+ it.each(blockedPolicies)('blocks quotes and rechecks fresh policy on confirmation (%j)',async(policy,message)=>{
+  const {auth,trading}=await storedTickets();
+  const {ticket}=await trading.quote('session',input);
+  await trading.quote('session',quickInput);
+  vi.mocked(MfpClient.prototype.getTradingPolicy).mockResolvedValue(policy);
+  const price=vi.mocked(MfpClient.prototype.getQuote);
+  price.mockClear();
+  auth.saveTicket.mockClear();
+  const send=vi.spyOn(MfpClient.prototype,'placeProtectedMarketOrder');
+  await expect(trading.quote('session',input)).rejects.toThrow('Trade blocked.');
+  await expect(trading.confirm('session',ticket.id)).rejects.toThrow(message);
+  await expect(trading.quick('session',{requestId:quickInput.requestId})).rejects.toThrow(message);
+  expect(price).not.toHaveBeenCalled();
+  expect(auth.saveTicket).not.toHaveBeenCalled();
+  expect(send).not.toHaveBeenCalled();
+ });
+ it.each([[[]],[['btc']],[['BTCUSDT']],[['BINANCE | BTCUSDT']]])('allows matching or empty competition allowlists (%j)',async marketAllowlist=>{
+  const {trading}=mocks();
+  vi.mocked(MfpClient.prototype.getTradingPolicy).mockResolvedValue({
+   competition:{market_allowlist:marketAllowlist},trading_halt:{categories:['stocks']},
+  });
+  await expect(trading.quote('session',input)).resolves.toMatchObject({ticket:{platformRules:{eligible:true}}});
  });
  it.each(['filled','rejected'])('recovers a lost order response with the real %s status',async status=>{
   const {auth,trading}=await storedTickets();

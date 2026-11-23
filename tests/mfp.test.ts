@@ -94,6 +94,28 @@ describe("order write recovery", () => {
   const client = new MfpClient("https://example.test", "test-key");
   const receipt = { id: "order", status: "filled" };
 
+  it.each([
+    [{ ...orderInput, replaceOverlappingExits: true }, true],
+    [{ ...orderInput, replaceOverlappingExits: true, takeProfitPrice: undefined }, true],
+    [{ ...orderInput, replaceOverlappingExits: true, takeProfitPrice: undefined, stopLossPrice: undefined }, undefined],
+    [orderInput, undefined],
+  ] as const)("only sends the exit replacement flag with explicit consent and attached protection", async (input, expected) => {
+    const request = vi.fn().mockResolvedValue(Response.json({ data: receipt }));
+    vi.stubGlobal("fetch", request);
+    await client.placeProtectedMarketOrder(input);
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(request.mock.calls[0]![1].body).replace_overlapping_exits).toBe(expected);
+  });
+
+  it("preserves the rule ID on an exit allocation rejection", async () => {
+    const request = vi.fn().mockResolvedValue(Response.json({
+      error: { code: "rule_violation", rule_id: "exit-allocation", message: "Overlapping exits" },
+    }, { status: 422 }));
+    vi.stubGlobal("fetch", request);
+    await expect(client.placeProtectedMarketOrder(orderInput)).rejects.toMatchObject({ ruleId: "exit-allocation" });
+    expect(request).toHaveBeenCalledTimes(1);
+  });
+
   it("looks up the documented order page by client order ID and account only", async () => {
     const request = vi.fn()
       .mockResolvedValueOnce(Response.json({ data: [receipt], next_cursor: null }))

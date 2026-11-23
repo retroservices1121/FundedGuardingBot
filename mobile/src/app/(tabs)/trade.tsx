@@ -1,4 +1,4 @@
-import { orderResultMessage, TradeWriteUncertainError } from '../../lib/trade-write';
+import { orderResultMessage, TradeWriteUncertainError, TradeWriteValidationError } from '../../lib/trade-write';
 import { TradeWriteNotice } from '../../components/trade-write-notice';
 import { useIsFocused } from 'expo-router/react-navigation';
 import { Link, useLocalSearchParams, useNavigation } from 'expo-router';
@@ -8,7 +8,8 @@ import { ActivityIndicator, Alert, Keyboard, Modal, FlatList, Pressable, ScrollV
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { useSession } from '../../../App';
 type Market={id:string;symbol:string;coin:string;provider:string;maxLeverage?:number};
-type Ticket={id:string;symbol:string;side:string;riskUsd:number;size:number;expectedPrice:number;stopLossPrice:number;takeProfitPrice:number;estimatedNotional:number;estimatedFee?:number;leverage:number;expiresAt:number;platformRules?:{warnings:string[];estimatedMargin?:number}};
+type Ticket={id:string;symbol:string;side:string;riskUsd:number;size:number;expectedPrice:number;stopLossPrice:number;takeProfitPrice:number;estimatedNotional:number;estimatedFee?:number;leverage:number;expiresAt:number;exitReplacement?:{positionId:string;orderIds:string[]};platformRules?:{warnings:string[];estimatedMargin?:number}};
+const exitReplacementMessage='If this order fills, its take profit and stop loss will replace existing exits and cover the full position.';
 const money=(v?:number)=>typeof v==='number'&&Number.isFinite(v)?new Intl.NumberFormat('en-US',{style:'currency',currency:'USD',maximumFractionDigits:v!==0&&Math.abs(v)<1?8:2}).format(v):'Unavailable';
 const newQuickRequestId=()=>`quick_${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}_${Math.random().toString(36).slice(2)}`;
 export default function Trade(){
@@ -33,7 +34,7 @@ export default function Trade(){
   pending.current=true;setBusy(true);setError('');setResult('');
   const requestId=newQuickRequestId();
   try{
-   const quote=await request('trade/quote','POST',{requestId,marketId,side,riskUsd:amount,leverage:Number(leverage),stopPercent:Number(stop),rewardRisk:Number(reward)},token);
+   const quote=await request('trade/quote','POST',{requestId,marketId,side,riskUsd:amount,leverage:Number(leverage),stopPercent:Number(stop),rewardRisk:Number(reward),reviewExitReplacement:true},token);
    if(!navigation.isFocused())return;
    const order:Ticket=quote.ticket;
    const warnings=order.platformRules?.warnings??[];
@@ -41,7 +42,8 @@ export default function Trade(){
     quote.dryRun?'Confirm practice order?':'Submit market order?',
     [`${order.side==='buy'?'Long':'Short'} ${market.symbol} · ${market.provider}`,
      `Size ${order.size} · ${order.leverage}x leverage · ${money(order.riskUsd)} at risk`,
-     `Take profit ${money(order.takeProfitPrice)}\nStop loss ${money(order.stopLossPrice)}`,...warnings].join('\n'),
+     `Take profit ${money(order.takeProfitPrice)}\nStop loss ${money(order.stopLossPrice)}`,
+     ...(order.exitReplacement?[exitReplacementMessage]:[]),...warnings].join('\n'),
     [{text:'Cancel',style:'cancel',onPress:()=>resolve(false)},{text:quote.dryRun?'Confirm':'Submit order',onPress:()=>resolve(true)}],
     {cancelable:true,onDismiss:()=>resolve(false)},
    ));
@@ -58,14 +60,17 @@ export default function Trade(){
  const [leverageOpen,setLeverageOpen]=useState(false);
  async function review(){
   if(pending.current||writeState!=='ready')return;if(missing){setError(missing);return;}pending.current=true;setBusy(true);setError('');setResult('');
-  try{const value=await request('trade/quote','POST',{marketId,side,riskUsd:Number(risk),leverage:Number(leverage),stopPercent:Number(stop),rewardRisk:Number(reward)},token);setTicket(value.ticket);setAccountName(value.accountName);setDryRun(value.dryRun);setSubmitted(false);setNow(Date.now());}
+  try{const value=await request('trade/quote','POST',{marketId,side,riskUsd:Number(risk),leverage:Number(leverage),stopPercent:Number(stop),rewardRisk:Number(reward),reviewExitReplacement:true},token);setTicket(value.ticket);setAccountName(value.accountName);setDryRun(value.dryRun);setSubmitted(false);setNow(Date.now());}
   catch(e){setError(e instanceof Error?e.message:'Could not quote trade.');}
   finally{pending.current=false;setBusy(false);}
  }
  async function confirm(){
   if(!ticket||pending.current||submitted||writeState!=='ready')return;pending.current=true;setBusy(true);setError('');setSubmitted(true);
   try{const value=await request('trade/confirm','POST',{ticketId:ticket.id},token);setResult(orderResultMessage(value));setTicket(null);}
-  catch(e){if(!(e instanceof TradeWriteUncertainError))setError(e instanceof Error?e.message:'Submission could not be confirmed. Check MyFundedPerps before placing another trade.');}
+  catch(e){
+   if(e instanceof TradeWriteValidationError)setTicket(null);
+   if(!(e instanceof TradeWriteUncertainError))setError(e instanceof Error?e.message:'Submission could not be confirmed. Check MyFundedPerps before placing another trade.');
+  }
   finally{pending.current=false;setBusy(false);}
  }
  const missing = !market ? 'Choose a market to continue.' : !(Number(risk)>0 && Number.isFinite(Number(risk))) ? 'Choose a positive risk amount.' : !(Number(stop)>0 && Number(stop)<100 && Number.isFinite(Number(stop))) ? 'Enter a stop distance between 0 and 100%.' : !(Number(reward)>0 && Number(reward)<=100 && Number.isFinite(Number(reward))) ? 'Enter a reward/risk ratio above 0 and up to 100.' : !leverageLimit ? 'Leverage limits are unavailable for this asset. Choose another market or reload the app.' : !(Number(leverage)>=1 && Number.isFinite(Number(leverage))) ? 'Choose leverage of at least 1x.' : Number(leverage)>(market.maxLeverage??100) ? `This market supports up to ${market.maxLeverage??100}x leverage.` : '';
@@ -78,9 +83,10 @@ export default function Trade(){
    <Text style={styles.copy}>{dryRun?'Dry run only. No order will be sent.':'Confirmation sends a market order with attached TP and SL.'}</Text>
    {([['Risk at stop',money(ticket.riskUsd)],['Size',String(ticket.size)],['Leverage',`${ticket.leverage}x`],['Estimated entry',money(ticket.expectedPrice)],['Stop loss',money(ticket.stopLossPrice)],['Take profit',money(ticket.takeProfitPrice)],['Potential profit at TP',money(Math.abs(ticket.takeProfitPrice-ticket.expectedPrice)*ticket.size)],['Estimated notional',money(ticket.estimatedNotional)],['Estimated entry fee',money(ticket.estimatedFee)],['Estimated margin + entry fee',money(ticket.platformRules?.estimatedMargin)]] as const).map(([label,value])=><View key={label} style={styles.row}><Text style={styles.copy}>{label}</Text><Text style={styles.value}>{value}</Text></View>)}
    <Text style={styles.small}>Risk at stop excludes fees and slippage. Stop execution may differ from the stop price.</Text>
+   {!!ticket.exitReplacement&&<Text style={styles.warning}>{exitReplacementMessage}</Text>}
    {ticket.platformRules?.warnings.map(w=><Text key={w} style={styles.warning}>{w}</Text>)}
    {!submitted&&<Text style={styles.copy}>{expired?'Quote expired. Review again.':`Quote expires in ${Math.max(0,Math.ceil((ticket.expiresAt-now)/1000))} seconds.`}</Text>}
-   <Pressable accessibilityRole="button" disabled={busy||expired||submitted||writeState!=='ready'} style={[styles.button,(busy||expired||submitted||writeState!=='ready')&&styles.disabled]} onPress={()=>Alert.alert(dryRun?'Validate dry run?':'Confirm order?',`${ticket.symbol} ${ticket.side==='buy'?'Long':'Short'} on ${accountName}`, [{text:'Cancel',style:'cancel'},{text:dryRun?'Validate':'Submit order',onPress:()=>void confirm()}])}><Text style={styles.buttonText}>{submitted?'Submission attempted':dryRun?'Validate dry run':'Confirm trade'}</Text></Pressable>
+   <Pressable accessibilityRole="button" disabled={busy||expired||submitted||writeState!=='ready'} style={[styles.button,(busy||expired||submitted||writeState!=='ready')&&styles.disabled]} onPress={()=>Alert.alert(dryRun?'Validate dry run?':'Confirm order?',[`${ticket.symbol} ${ticket.side==='buy'?'Long':'Short'} on ${accountName}`,...(ticket.exitReplacement?[exitReplacementMessage]:[])].join('\n'), [{text:'Cancel',style:'cancel'},{text:dryRun?'Validate':'Submit order',onPress:()=>void confirm()}])}><Text style={styles.buttonText}>{submitted?'Submission attempted':dryRun?'Validate dry run':'Confirm trade'}</Text></Pressable>
    <Pressable accessibilityRole="button" disabled={busy||writeState!=='ready'} onPress={()=>{setTicket(null);setError('');}}><Text style={styles.link}>Back to trade inputs</Text></Pressable>
   </View>:<>
    <TextInput accessibilityLabel="Search markets or venues" placeholder="Search markets or venues" placeholderTextColor="#82968b" style={styles.input} value={search} onChangeText={v=>{setSearch(v);setSelector(true);}} autoCorrect={false}/>

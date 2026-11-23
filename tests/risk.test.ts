@@ -103,7 +103,7 @@ describe("guardian", () => {
       100,
       20,
     );
-    expect(problems).toContain("Opening exposure is restricted.");
+    expect(problems).toContain("This account cannot open or increase positions right now.");
     expect(problems.some((p) => p.includes("remaining loss room"))).toBe(true);
   });
 

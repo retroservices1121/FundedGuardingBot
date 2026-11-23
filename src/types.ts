@@ -40,6 +40,8 @@ export interface Market {
   id: string;
   market_id?: string;
   symbol?: string;
+  coin?: string;
+  category?: string;
   available?: boolean;
   size_precision?: number;
   quantity_precision?: number;
@@ -116,6 +118,7 @@ export interface TradingPolicy {
   copy_follower_locked?: boolean;
   copy_scope_blocked?: boolean;
   trading_halt?: { platform?: boolean; categories?: string[] };
+  competition?: { opening_exposure_restricted?: boolean; market_allowlist?: string[] } | null;
   restriction?: { restriction?: string; reason?: string } | null;
   account_rules?: unknown;
   limits?: {
@@ -162,5 +165,6 @@ export interface TradeTicket {
   leverage: number;
   guardianWarning?: string;
   platformRules?: PlatformRuleCheck;
+  exitReplacement?: { positionId: string; orderIds: string[] };
   expiresAt: number;
 }

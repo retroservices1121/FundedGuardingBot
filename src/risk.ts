@@ -125,6 +125,36 @@ export function accountRuleProgress(account: ChallengeAccount, policy?: TradingP
   };
 }
 
+export function tradingPolicyProblems(policy: TradingPolicy, market?: Market): string[] {
+  const problems: string[] = [];
+  if (policy.payout_pending) problems.push("Trading is paused while your payout is pending.");
+  if (policy.copy_follower_locked || policy.copy_scope_blocked) problems.push("Your copy trading setup blocks this trade.");
+  if (policy.manual_trading_blocked && !problems.length) problems.push("This account is blocked from placing trades manually.");
+  if (policy.restriction?.restriction === "reduce_only") problems.push("This account can only reduce or close existing positions.");
+  if (policy.opening_exposure_restricted) problems.push("This account cannot open or increase positions right now.");
+  if (policy.competition?.opening_exposure_restricted) problems.push("Your competition account cannot open or increase positions right now.");
+  if (policy.trading_halt?.platform) problems.push("MyFundedPerps has paused opening and increasing positions.");
+  if (market) {
+    const normalize = (value: string) => value.trim().toLowerCase().replace(/\s*\|\s*/g, "|");
+    const allowlist = policy.competition?.market_allowlist;
+    const marketId = market.market_id ?? market.id;
+    const identifiers = [marketId, market.symbol, market.coin ?? marketId.split("|").at(-1)]
+      .filter((value): value is string => !!value).map(normalize);
+    if (allowlist?.length && !allowlist.some(entry => identifiers.includes(normalize(entry)))) {
+      problems.push("This market is not available in your competition.");
+    }
+    const halted = policy.trading_halt?.categories;
+    if (halted?.length) {
+      const category = market.category?.trim();
+      if (!category) problems.push("We could not check whether trading is paused for this market.");
+      else if (halted.some(entry => normalize(entry) === normalize(category))) {
+        problems.push("MyFundedPerps has paused opening and increasing positions in this market.");
+      }
+    }
+  }
+  return problems;
+}
+
 export function guardAccount(
   account: ChallengeAccount,
   policy: TradingPolicy,
@@ -139,12 +169,7 @@ export function guardAccount(
     problems.push(`Account status is ${account.status}.`);
   }
   if (risk.marks_complete === false) problems.push("Fresh marks are incomplete.");
-  if (policy.manual_trading_blocked) problems.push("Trading is blocked by account policy.");
-  if (policy.opening_exposure_restricted) problems.push("Opening exposure is restricted.");
-  if (policy.payout_pending) problems.push("A payout lock is active.");
-  if (policy.copy_follower_locked || policy.copy_scope_blocked) problems.push("Copy-trading policy blocks this order.");
-  if (policy.trading_halt?.platform) problems.push("The platform is under a trading halt.");
-  if (policy.restriction?.restriction === "reduce_only") problems.push("Account is reduce-only.");
+  problems.push(...tradingPolicyProblems(policy));
   if (enforceUserLimits && requestedRisk > maxRisk) problems.push(`Requested risk $${requestedRisk} exceeds your $${maxRisk} cap.`);
 
   const allowed = riskAllowance(account, maxRisk, maxLossRoomUsagePercent);
@@ -195,8 +220,8 @@ export function platformRuleCheck(input: {
   const estimatedMargin = ticket.leverage > 0
     ? ticket.estimatedNotional / ticket.leverage + (ticket.estimatedFee ?? 0)
     : undefined;
-  const problems: string[] = [];
-  const warnings = guardAccount(account, policy, ticket.riskUsd, Number.POSITIVE_INFINITY, 100, false);
+  const problems = tradingPolicyProblems(policy, market);
+  const warnings = guardAccount(account, {}, ticket.riskUsd, Number.POSITIVE_INFINITY, 100, false);
   const notes: string[] = [];
 
   if (maxPositionNotional !== undefined && ticket.estimatedNotional > maxPositionNotional) {
