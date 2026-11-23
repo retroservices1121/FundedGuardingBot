@@ -12,6 +12,7 @@ export interface RiskSnapshot {
   max_drawdown_room?: number | null;
   max_loss_room?: number | null;
   remaining_profit?: number | null;
+  remaining_profit_equity?: number | null;
   remaining_profit_target?: number | null;
   requirements?: {
     daily_loss_pct?: number | null;
@@ -43,6 +44,11 @@ export interface Market {
   coin?: string;
   category?: string;
   available?: boolean;
+  trading_enabled?: boolean;
+  size_step?: number;
+  size_decimals?: number;
+  min_size?: number;
+  min_notional?: number;
   size_precision?: number;
   quantity_precision?: number;
   [key: string]: unknown;

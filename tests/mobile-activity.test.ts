@@ -16,8 +16,9 @@ function setup(){
 }
 describe('native position closing',()=>{
  it('rounds partial closes down and omits full-close size',()=>{
-  expect(closeSize(10.123,25,2)).toBe(2.53);expect(closeSize(10.123,100,2)).toBeUndefined();
-  expect(()=>closeSize(0.001,25,2)).toThrow('precision');expect(()=>closeSize(10,20,2)).toThrow();
+  const market={id:'a',size_step:0.25};
+  expect(closeSize(10.123,25,market)).toBe(2.5);expect(closeSize(10.123,100)).toBeUndefined();
+  expect(()=>closeSize(0.001,25,market)).toThrow('too small');expect(()=>closeSize(10,20,market)).toThrow();
  });
  it('rejects position IDs outside the selected account',async()=>{
   const {activity,close}=setup();await expect(activity.quoteClose('session',{positionId:'other',percent:100})).rejects.toThrow('selected account');expect(close).not.toHaveBeenCalled();
@@ -26,6 +27,16 @@ describe('native position closing',()=>{
   const {activity,auth,close}=setup();const {ticket}=await activity.quoteClose('session',{positionId:'p',percent:100});auth.claimClose.mockResolvedValue(ticket);
   expect(await activity.confirmClose('session',ticket.id)).toMatchObject({status:'pending'});
   expect(close).toHaveBeenCalledWith('p',undefined,1.16,ticket.id);
+  expect(MfpClient.prototype.listMarkets).not.toHaveBeenCalled();
+ });
+ it('allows a step-rounded partial close when the market is closed to new orders',async()=>{
+  const {position,activity,auth,close}=setup();
+  vi.mocked(MfpClient.prototype.listMarkets).mockResolvedValue([{id:position.market_id,size_step:0.25,trading_enabled:false}]);
+  const {ticket}=await activity.quoteClose('session',{positionId:'p',percent:25});
+  expect(ticket.size).toBe(86_623.5);
+  auth.claimClose.mockResolvedValue(ticket);
+  await activity.confirmClose('session',ticket.id);
+  expect(close).toHaveBeenCalledExactlyOnceWith('p',86_623.5,1.16,ticket.id);
  });
  it('does not close when size changes after review',async()=>{
   const {activity,auth,close}=setup();auth.claimClose.mockResolvedValue({accountId:'a',positionId:'p',originalSize:1,expiresAt:Date.now()+10000});

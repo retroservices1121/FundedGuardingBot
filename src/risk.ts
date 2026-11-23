@@ -106,7 +106,9 @@ export function accountRuleProgress(account: ChallengeAccount, policy?: TradingP
   };
   const profitTargetPct = finite(requirement.profit_target_pct);
   const profitTargetAmount = amountFromPercent(profitTargetPct);
-  const remainingProfit = funded ? undefined : finite(risk.remaining_profit);
+  const remainingProfit = funded ? undefined : finite(
+    risk.remaining_profit_equity === undefined ? risk.remaining_profit : risk.remaining_profit_equity,
+  );
   const achievedAmount = profitTargetAmount !== undefined && remainingProfit !== undefined
     ? clamp(profitTargetAmount - remainingProfit, 0, profitTargetAmount)
     : undefined;
@@ -221,6 +223,8 @@ export function platformRuleCheck(input: {
     ? ticket.estimatedNotional / ticket.leverage + (ticket.estimatedFee ?? 0)
     : undefined;
   const problems = tradingPolicyProblems(policy, market);
+  const marketProblem = marketOrderProblem(market, ticket.size, ticket.estimatedNotional);
+  if (marketProblem) problems.push(marketProblem);
   const warnings = guardAccount(account, {}, ticket.riskUsd, Number.POSITIVE_INFINITY, 100, false);
   const notes: string[] = [];
 
@@ -263,17 +267,57 @@ export function platformRuleCheck(input: {
 
 export class RiskSizingError extends Error {}
 
+export function marketAllowsOpening(market: Market): boolean {
+  return market.trading_enabled ?? (market.available !== false);
+}
+
+export function roundMarketSize(size: number, market?: Market): number | undefined {
+  const precision = market?.size_decimals ?? market?.size_precision ?? market?.quantity_precision;
+  const step = market?.size_step ?? (precision === undefined ? undefined : 10 ** -precision);
+  if (step === undefined || !Number.isFinite(step) || step <= 0 || !Number.isFinite(size) || size < 0) return;
+
+  // Work in whole step units, preserving decimal sizes such as 0.3 for a 0.1 step.
+  const [mantissa, exponent = "0"] = step.toString().split("e");
+  const decimals = Math.max(0, (mantissa!.split(".")[1]?.length ?? 0) - Number(exponent));
+  const factor = 10 ** decimals;
+  const unitsPerStep = Math.round(step * factor);
+  const steps = Math.floor(size * factor / unitsPerStep);
+  if (!Number.isSafeInteger((steps + 1) * unitsPerStep)) return;
+  const next = (steps + 1) * unitsPerStep / factor;
+  if (next <= size) return next;
+  const rounded = steps * unitsPerStep / factor;
+  return rounded <= size ? rounded : (steps - 1) * unitsPerStep / factor;
+}
+
+export function marketOrderProblem(market: Market, size: number, notional?: number): string | undefined {
+  if (!marketAllowsOpening(market)) return "This market is closed to new orders.";
+  if (size <= 0 || (market.min_size !== undefined && size < market.min_size)) {
+    return market.min_size === undefined
+      ? "The order is too small for this market."
+      : `This market requires an order size of at least ${market.min_size}. Increase your risk amount or choose another market.`;
+  }
+  const rounded = roundMarketSize(size, market);
+  if (rounded === undefined) return "We could not check the allowed order size for this market.";
+  if (rounded !== size) return "The allowed order size changed. Review a new quote.";
+  if (notional !== undefined && !Number.isFinite(notional)) return "A valid order value is unavailable.";
+  if (notional !== undefined && market.min_notional !== undefined && notional < market.min_notional) {
+    return `This market requires an order worth at least $${market.min_notional}. Increase your risk amount or choose another market.`;
+  }
+}
+
 export function calculateSize(
   riskUsd: number,
   entryPrice: number,
   stopPercent: number,
-  precision: number,
+  market: Market,
 ): number {
   const stopDistance = entryPrice * (stopPercent / 100);
-  if (stopDistance <= 0) throw new RiskSizingError("Stop distance must be positive.");
-  const rawSize = riskUsd / stopDistance;
-  const factor = 10 ** precision;
-  return Math.floor(rawSize * factor) / factor;
+  if (!Number.isFinite(stopDistance) || stopDistance <= 0) throw new RiskSizingError("A valid market price is unavailable.");
+  const size = roundMarketSize(riskUsd / stopDistance, market);
+  if (size === undefined) throw new RiskSizingError("We could not check the allowed order size for this market.");
+  const problem = marketOrderProblem(market, size);
+  if (problem) throw new RiskSizingError(problem);
+  return size;
 }
 
 export function buildTicket(input: {
@@ -285,17 +329,25 @@ export function buildTicket(input: {
   side: Side;
   riskUsd: number;
   quote: Quote;
+  size?: number;
   stopPercent: number;
   rewardRisk: number;
   leverage: number;
   ttlSeconds: number;
 }): TradeTicket {
   const entry = input.quote.estimated_fill_price ?? input.quote.mid;
-  const precision = input.market.size_precision ?? input.market.quantity_precision ?? 6;
-  const size = calculateSize(input.riskUsd, entry, input.stopPercent, precision);
-  if (size <= 0) throw new RiskSizingError("Calculated size is below the market minimum precision.");
-  const stopDistance = entry * (input.stopPercent / 100);
+  if (!Number.isFinite(entry) || entry <= 0) throw new RiskSizingError("A valid market price is unavailable.");
+  const size = input.size ?? calculateSize(input.riskUsd, entry, input.stopPercent, input.market);
+  const estimatedNotional = input.quote.estimated_notional ?? size * entry;
+  const problem = marketOrderProblem(input.market, size, estimatedNotional);
+  if (problem) throw new RiskSizingError(problem);
+  const stopDistance = input.size === undefined ? entry * (input.stopPercent / 100) : input.riskUsd / size;
   const direction = input.side === "buy" ? 1 : -1;
+  const stopLossPrice = entry - direction * stopDistance;
+  const takeProfitPrice = entry + direction * stopDistance * input.rewardRisk;
+  if (![stopLossPrice, takeProfitPrice].every(price => Number.isFinite(price) && price > 0)) {
+    throw new RiskSizingError("These inputs produce invalid stop loss or take profit prices.");
+  }
   return {
     id: input.id,
     userId: input.userId,
@@ -306,9 +358,9 @@ export function buildTicket(input: {
     riskUsd: input.riskUsd,
     size,
     expectedPrice: entry,
-    stopLossPrice: entry - direction * stopDistance,
-    takeProfitPrice: entry + direction * stopDistance * input.rewardRisk,
-    estimatedNotional: input.quote.estimated_notional ?? size * entry,
+    stopLossPrice,
+    takeProfitPrice,
+    estimatedNotional,
     estimatedFee: input.quote.estimated_fee,
     leverage: input.leverage,
     expiresAt: Date.now() + input.ttlSeconds * 1000,

@@ -1,17 +1,19 @@
 import { MobileValidationError, MobileWriteUncertainError } from './mobile-errors.js';
 import { createClosedPositionShareCard } from "./share-card.js";
-import type { Position } from "./types.js";
+import type { Market, Position } from "./types.js";
 import { randomUUID } from 'node:crypto';
 import { MobileAuth } from './mobile-auth.js';
 import { closeClientOrderId, MfpClient, positionExitOrders } from './mfp.js';
 import { SecretBox } from './crypto.js';
 import type { Config } from './config.js';
 import { orderRequestRejected, reconcileOrder, submitOrder } from './mobile-order.js';
-export function closeSize(size:number,percent:number,precision:number){
+import { roundMarketSize } from './risk.js';
+export function closeSize(size:number,percent:number,market?:Market){
   if(![25,50,75,100].includes(percent)||!Number.isFinite(size)||size<=0)throw new MobileValidationError('Choose a valid close percentage for an open position.');
   if(percent===100)return undefined;
-  const factor=10**precision,value=Math.floor(size*percent/100*factor)/factor;
-  if(!Number.isFinite(value)||value<=0)throw new MobileValidationError('Partial close is below the market precision. Choose Close all.');
+  const value=roundMarketSize(size*percent/100,market);
+  if(value===undefined)throw new MobileValidationError('We could not check the allowed size for a partial close. Choose Close all.');
+  if(value<=0)throw new MobileValidationError('This partial close is too small. Choose Close all.');
   return value;
 }
 export class MobileActivity {
@@ -34,8 +36,9 @@ export class MobileActivity {
   const positions=await client.listOpenPositions(connection.selected_account_id);
   const position=positions.find(p=>p.id===input.positionId);
   if(!position)throw new MobileValidationError('This position is no longer open on the selected account.');
-  const percent=Number(input.percent),markets=await client.listMarkets(),market=markets.find(m=>m.id===position.market_id);
-  const size=closeSize(Math.abs(position.size),percent,market?.size_precision??market?.quantity_precision??8);
+  const percent=Number(input.percent);
+  const market=percent===100?undefined:(await client.listMarkets()).find(m=>m.id===position.market_id);
+  const size=closeSize(Math.abs(position.size),percent,market);
   const quote=await client.getQuote(position.market_id,position.side==='long'?'sell':'buy',size??Math.abs(position.size));
   if(quote.fillable===false)throw new MobileValidationError('This close size is not currently fillable.');
   if(!Number.isFinite(quote.mid)||quote.mid<=0)throw new MobileValidationError('A fresh close price is unavailable.');

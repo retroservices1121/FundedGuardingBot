@@ -51,7 +51,7 @@ export default function AccountDashboard({token,accountId,request}:Props) {
         <Text style={styles.small}>Available balance: {money(data.risk.available_balance)}</Text>
       </View>
       {data.risk.marks_complete===false&&<Text style={styles.error}>Some market prices are not fresh. Equity and P&L may be unavailable.</Text>}
-      {data.account.stage?.toLowerCase()!=='funded'&&<View style={styles.card}><Text style={styles.label}>Profit target</Text><Text style={styles.value}>{money(data.rules.profit.remaining)}</Text><Text style={styles.small}>Remaining to target</Text><Progress percent={data.rules.profit.achievedPercent} /><Text style={styles.small}>Achieved {money(data.rules.profit.achievedAmount)} of {money(data.rules.profit.targetAmount)}</Text></View>}
+      {data.account.stage?.toLowerCase()!=='funded'&&<View style={styles.card}><Text style={styles.label}>Profit target</Text><Text style={styles.value}>{money(data.rules.profit.remaining)}</Text><Text style={styles.small}>Remaining to pass, including gains and losses on open positions</Text><Progress percent={data.rules.profit.achievedPercent} /><Text style={styles.small}>Achieved {money(data.rules.profit.achievedAmount)} of {money(data.rules.profit.targetAmount)}</Text></View>}
       <LossCard title="Daily loss limit" rule={data.rules.dailyLoss} /><LossCard title="Maximum drawdown" rule={data.rules.maxDrawdown} />
       <Text style={styles.small}>Updated {new Date(data.updatedAt).toLocaleTimeString()}. Refreshes automatically while the app is open.</Text>
     </>}

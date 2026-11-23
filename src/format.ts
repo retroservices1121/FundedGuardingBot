@@ -1,6 +1,6 @@
 import { InlineKeyboard } from "grammy";
 import type { ChallengeAccount, Position, PositionView, TradeTicket } from "./types.js";
-import { accountRisk } from "./risk.js";
+import { accountRisk, accountRuleProgress } from "./risk.js";
 
 export const money = (value: unknown) =>
   typeof value === "number" && Number.isFinite(value)
@@ -22,7 +22,7 @@ export function accountMessage(account: ChallengeAccount, environment: string, d
     "",
     `Daily loss room: ${money(risk.daily_loss_room)}`,
     `Max loss room: ${money(risk.max_loss_room)}`,
-    `Profit target remaining: ${money(risk.remaining_profit_target)}`,
+    `Remaining to pass: ${money(accountRuleProgress(account).profit.remaining)}`,
   ].join("\n");
 }
 

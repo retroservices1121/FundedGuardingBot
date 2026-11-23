@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { closedPositionsMessage, positionsMessage } from "../src/format.js";
+import { accountMessage, closedPositionsMessage, positionsMessage } from "../src/format.js";
+
+it("shows equity-based pass progress in account status", () => {
+  expect(accountMessage({ id: "a", risk: { remaining_profit: 100, remaining_profit_equity: 0 } }, "live", true))
+    .toContain("Remaining to pass: $0.00");
+  expect(accountMessage({ id: "a", risk: { remaining_profit: 100, remaining_profit_equity: null } }, "live", true))
+    .toContain("Remaining to pass: Unavailable");
+});
 
 describe("positionsMessage", () => {
   it("shows an empty state", () => {

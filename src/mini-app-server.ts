@@ -3,7 +3,7 @@ import { createLandingApi } from "./landing.js";
 import { MobileRequestLimiter } from "./mobile-request-limiter.js";
 import {MobilePush} from './mobile-push.js';
 import { parseGuards } from "./mobile-guards.js";
-import { MobileActivity } from "./mobile-activity.js";
+import { closeSize, MobileActivity } from "./mobile-activity.js";
 import { MobileTrading } from "./mobile-trading.js";
 import { MobileAuth } from "./mobile-auth.js";
 import { MobileSessionError, MobileValidationError, MobileWriteUncertainError } from "./mobile-errors.js";
@@ -16,7 +16,7 @@ import { SecretBox } from "./crypto.js";
 import { Database } from "./db.js";
 import { isActiveAccount, isPassedAccount, MfpClient, MfpError, MfpTransportError } from "./mfp.js";
 import { accountDailyPnl, automaticLockReason } from "./guardian.js";
-import { accountRisk, accountRuleProgress, buildTicket, calculateSize, guardAccount, platformRuleCheck, resolveAccountRequirements, riskAllowance, RiskSizingError } from "./risk.js";
+import { accountRisk, accountRuleProgress, buildTicket, calculateSize, guardAccount, marketAllowsOpening, marketOrderProblem, platformRuleCheck, resolveAccountRequirements, riskAllowance, RiskSizingError } from "./risk.js";
 import { createClosedPositionShareCard } from "./share-card.js";
 import { createPassedAccountCard } from "./passed-card.js";
 import { validateTelegramInitData, type TelegramMiniAppUser } from "./telegram-auth.js";
@@ -194,7 +194,7 @@ export function startMiniAppServer(config: Config, db: Database) {
     });
 
     // Return metadata for every available market without a quote request per row.
-    const markets = allMarkets.filter(market => market.available !== false)
+    const markets = allMarkets.filter(marketAllowsOpening)
       .map(market => ({
         id: market.id,
         symbol: marketSymbol(market),
@@ -295,14 +295,13 @@ export function startMiniAppServer(config: Config, db: Database) {
       if (requestedRisk > state.user.maxRiskUsd) throw new Error(`Requested risk $${requestedRisk} exceeds your $${state.user.maxRiskUsd} limit.`);
       if (requestedRisk > allowance.allowedRisk) throw new Error(`Risk exceeds your configured loss-room limit of $${allowance.allowedRisk.toFixed(2)}.`);
     }
-    const market = markets.find(item => item.id === marketId && item.available !== false);
+    const market = markets.find(item => item.id === marketId);
     if (!market) throw new Error("That market is not currently available.");
+    if (!marketAllowsOpening(market)) throw new Error("This market is closed to new orders.");
     const symbol = marketSymbol(market);
     const firstQuote = await state.client.getQuote(market.id);
-    const precision = market.size_precision ?? market.quantity_precision ?? 6;
-    const provisionalSize = calculateSize(requestedRisk, firstQuote.mid, state.user.stopPercent, precision);
-    const quote = await state.client.getQuote(market.id, side, provisionalSize);
-    if (quote.fillable === false) throw new Error("The calculated size is not fillable.");
+    const size = calculateSize(requestedRisk, firstQuote.mid, state.user.stopPercent, market);
+    const quote = await state.client.getQuote(market.id, side, size);
     const ticket = buildTicket({
       id: randomUUID().slice(0, 12),
       userId: state.user.telegramId,
@@ -312,11 +311,13 @@ export function startMiniAppServer(config: Config, db: Database) {
       side,
       riskUsd: requestedRisk,
       quote,
+      size,
       stopPercent: state.user.stopPercent,
       rewardRisk: state.user.rewardRisk,
       leverage: requestedLeverage,
       ttlSeconds: config.CONFIRMATION_TTL_SECONDS,
     });
+    if (quote.fillable === false) throw new Error("This order size cannot be filled right now.");
     if (state.user.guardianMode === "warn") {
       const allowance = riskAllowance(state.account, state.user.maxRiskUsd, state.user.maxLossRoomUsagePercent);
       if (requestedRisk > allowance.allowedRisk) {
@@ -441,16 +442,15 @@ export function startMiniAppServer(config: Config, db: Database) {
       if (!ticket) throw new Error("This quote expired or was already used.");
       const currentUser = await db.getUser(user.telegramId);
       if (currentUser.lockedUntil && currentUser.lockedUntil.getTime() > Date.now()) throw new Error("Trading is locked.");
-      const [freshAccount, freshPolicy, freshPositions, freshMarkets] = await Promise.all([
+      const [freshAccount, freshMarkets] = await Promise.all([
         client.getAccount(ticket.accountId),
-        client.getTradingPolicy(ticket.accountId),
-        client.listOpenPositions(ticket.accountId),
         client.listMarkets(),
       ]);
       if (!isActiveAccount(freshAccount)) throw new Error("This challenge is no longer active for trading.");
-      const freshMarket = freshMarkets.find(item => item.id === ticket.marketId && item.available !== false);
+      const freshMarket = freshMarkets.find(item => item.id === ticket.marketId);
       if (!freshMarket) throw new Error("MyFundedPerps rule check: this market is no longer available.");
-      const freshCheck = platformRuleCheck({ account: freshAccount, policy: freshPolicy, market: freshMarket, ticket, openPositions: freshPositions });
+      const marketProblem = marketOrderProblem(freshMarket, ticket.size, ticket.estimatedNotional);
+      if (marketProblem) throw new Error(marketProblem);
       if (config.DRY_RUN) {
         await db.recordTradeExecution({ ticketId: ticket.id, telegramId: user.telegramId, accountId: ticket.accountId, symbol: ticket.symbol, side: ticket.side, notionalUsd: ticket.estimatedNotional, dryRun: true, status: "validated" });
         return json(response, 200, { dryRun: true, status: "validated" });
@@ -475,23 +475,19 @@ export function startMiniAppServer(config: Config, db: Database) {
       const state = await selectedAccount(request);
       const payload = await body(request);
       const positionId = decodeURIComponent(closeMatch[1]!);
+      const percent = Number(payload.percent);
+      if (![25, 50, 75, 100].includes(percent)) throw new Error("Choose 25%, 50%, 75%, or 100%.");
       const [positions, markets] = await Promise.all([
         state.client.listOpenPositions(state.account.id),
-        state.client.listMarkets(),
+        percent === 100 ? [] : state.client.listMarkets(),
       ]);
       const position = positions.find(item => item.id === positionId);
       if (!position) throw new Error("That open position is unavailable. Refresh and try again.");
-      const percent = Number(payload.percent);
-      if (![25, 50, 75, 100].includes(percent)) throw new Error("Choose 25%, 50%, 75%, or 100%.");
       if (config.DRY_RUN) return json(response, 200, { dryRun: true, status: "validated" });
       const market = markets.find(item => item.id === position.market_id || item.market_id === position.market_id);
-      const precision = market?.size_precision ?? market?.quantity_precision ?? 8;
-      const factor = 10 ** precision;
-      const size = percent === 100 ? undefined : Math.floor(position.size * percent / 100 * factor) / factor;
-      if (size !== undefined && size <= 0) throw new Error("This partial close is below the market's minimum size. Use Close all instead.");
+      const size = closeSize(Math.abs(position.size), percent, market);
       const closeSide = position.side === "long" ? "sell" : "buy";
-      const closeSize = size ?? position.size;
-      const quote = await state.client.getQuote(position.market_id, closeSide, closeSize);
+      const quote = await state.client.getQuote(position.market_id, closeSide, size ?? position.size);
       if (quote.fillable === false) throw new Error("MyFundedPerps cannot currently fill this close size. Try again or close a smaller amount.");
       const expectedPrice = quote.estimated_fill_price ?? (closeSide === "sell" ? quote.bid : quote.ask) ?? quote.mid;
       if (!Number.isFinite(expectedPrice) || expectedPrice <= 0) throw new Error("A valid close price is not currently available. Refresh and try again.");
@@ -732,7 +728,7 @@ export function startMiniAppServer(config: Config, db: Database) {
           if (url.pathname === "/api/mobile/auth/markets" && request.method === "GET") {
             await mobileAuth.user(token);
             try {
-              const markets = (await new MfpClient(HOSTS.live, "").listMarkets()).filter(market => market.available !== false)
+              const markets = (await new MfpClient(HOSTS.live, "").listMarkets()).filter(marketAllowsOpening)
                 .map(market => ({id:market.id,symbol:marketSymbol(market),coin:marketCoin(market),provider:marketProvider(market),category:market.category,maxLeverage:market.max_leverage}));
               return json(response,200,{markets});
             } catch { return json(response,502,{error:"Could not load markets. Please try again."}); }

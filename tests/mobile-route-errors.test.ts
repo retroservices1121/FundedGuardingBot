@@ -53,7 +53,7 @@ beforeEach(() => {
   vi.spyOn(MfpClient.prototype,'listWorkingOrders').mockResolvedValue([]);
   vi.spyOn(MfpClient.prototype,'getAccount').mockResolvedValue({id:'account',status:'active'});
   vi.spyOn(MfpClient.prototype,'getTradingPolicy').mockResolvedValue({});
-  vi.spyOn(MfpClient.prototype,'listMarkets').mockResolvedValue([{id:position.market_id,max_leverage:10}]);
+  vi.spyOn(MfpClient.prototype,'listMarkets').mockResolvedValue([{id:position.market_id,max_leverage:10,size_step:0.25}]);
   vi.spyOn(MfpClient.prototype,'getQuote').mockResolvedValue({mid:100,bid:99,ask:101});
 });
 
@@ -81,6 +81,26 @@ describe('mobile route errors', () => {
     const response = await post(path, data);
     expect(response.status).toBe(400);
     expect(await response.json()).toEqual({error:message,uncertain:false});
+  });
+
+  it('returns equity-based profit progress on the dashboard', async () => {
+    vi.mocked(MfpClient.prototype.getAccount).mockResolvedValue({
+      id:'account', stage:'evaluation', status:'active', starting_balance:25_000,
+      risk:{remaining_profit:1_000,remaining_profit_equity:500,requirements:{profit_target_pct:8}},
+    });
+    const response = await apiFetch(base + 'dashboard',{headers:{Authorization:'Bearer test-session'}});
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({rules:{profit:{remaining:500,achievedPercent:75}}});
+  });
+
+  it('lists only markets that accept new orders', async () => {
+    vi.mocked(MfpClient.prototype.listMarkets).mockResolvedValue([
+      {id:position.market_id,trading_enabled:true,available:false},
+      {id:'paused',trading_enabled:false,available:true},
+    ]);
+    const response = await apiFetch(base + 'markets',{headers:{Authorization:'Bearer test-session'}});
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({markets:[{id:position.market_id}]});
   });
 
   it('returns a definite trade block when the policy changes after review', async () => {

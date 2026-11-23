@@ -6,7 +6,7 @@ import type { Config } from './config.js';
 import { MobileAuth } from './mobile-auth.js';
 import { MfpClient, MfpError, isActiveAccount, positionExitOrders } from './mfp.js';
 import { SecretBox } from './crypto.js';
-import { buildTicket, calculateSize, platformRuleCheck, tradingPolicyProblems } from './risk.js';
+import { buildTicket, calculateSize, marketAllowsOpening, platformRuleCheck, tradingPolicyProblems } from './risk.js';
 import type { PersonalGuards } from './mobile-guards.js';
 import { orderRequestRejected, reconcileOrder, submitOrder } from './mobile-order.js';
 
@@ -58,24 +58,16 @@ export class MobileTrading {
     if(quick)checkQuickPrefs(connection.personal_guards,values.riskUsd);
     const [account,policy,markets,positions]=await Promise.all([client.getAccount(connection.selected_account_id),client.getTradingPolicy(connection.selected_account_id),client.listMarkets(),client.listOpenPositions(connection.selected_account_id)]);
     if(!isActiveAccount(account))throw new MobileValidationError('Select an active account from Home.');
-    const market=markets.find(m=>m.id===values.marketId&&m.available!==false);
+    const market=markets.find(m=>m.id===values.marketId);
     if(!market)throw new MobileValidationError('This market is currently unavailable.');
+    if(!marketAllowsOpening(market))throw new MobileValidationError('This market is closed to new orders.');
     blockTrade(tradingPolicyProblems(policy,market));
     const first=await client.getQuote(market.id);
-    if(!Number.isFinite(first.mid)||first.mid<=0)throw new MobileValidationError('A valid market price is unavailable.');
-    const size=calculateSize(values.riskUsd,first.mid,values.stopPercent,market.size_precision??market.quantity_precision??6);
+    const size=calculateSize(values.riskUsd,first.mid,values.stopPercent,market);
     const quote=await client.getQuote(market.id,values.side,size);
-    if(quote.fillable===false)throw new MobileValidationError('This size is not fillable at the market precision.');
-    const ticket=buildTicket({id,userId:0,accountId:account.id,market,symbol:String(market.symbol??market.id.split('|').at(-1)),...values,quote,ttlSeconds:this.config.CONFIRMATION_TTL_SECONDS});
-    // Preserve the exact size used for MFP's size-aware quote.
-    ticket.size = size;
-    const direction = values.side === 'buy' ? 1 : -1;
-    const distance = values.riskUsd / size;
-    ticket.stopLossPrice = ticket.expectedPrice - direction * distance;
-    ticket.takeProfitPrice = ticket.expectedPrice + direction * distance * values.rewardRisk;
-    ticket.estimatedNotional = quote.estimated_notional ?? size * ticket.expectedPrice;
+    const ticket=buildTicket({id,userId:0,accountId:account.id,market,symbol:String(market.symbol??market.id.split('|').at(-1)),...values,quote,size,ttlSeconds:this.config.CONFIRMATION_TTL_SECONDS});
+    if(quote.fillable===false)throw new MobileValidationError('This order size cannot be filled right now.');
     ticket.platformRules=platformRuleCheck({account,policy,market,ticket,openPositions:positions});
-    if(ticket.size<=0||!Number.isFinite(ticket.size)||!Number.isFinite(ticket.expectedPrice)||ticket.stopLossPrice<=0||ticket.takeProfitPrice<=0)throw new MobileValidationError('These inputs produce invalid prices or size.');
     const replacement=await exitReplacement(client,ticket,positions);
     if(replacement){
       if(input.reviewExitReplacement!==true)throw new MobileValidationError('This trade would replace your existing take profit or stop loss. Review it in the latest app or trade in MyFundedPerps.');
@@ -126,7 +118,7 @@ export class MobileTrading {
       if(connection.selected_account_id!==ticket.accountId)throw new MobileValidationError('Selected account changed. Review a new quote.');
       const [account,policy,markets,positions]=await Promise.all([client.getAccount(ticket.accountId),client.getTradingPolicy(ticket.accountId),client.listMarkets(),client.listOpenPositions(ticket.accountId)]);
       if(!isActiveAccount(account))throw new MobileValidationError('The account is no longer active.');
-      const market=markets.find(m=>m.id===ticket.marketId&&m.available!==false);
+      const market=markets.find(m=>m.id===ticket.marketId);
       if(!market)throw new MobileValidationError('The market is no longer available.');
       guardWarnings(connection.personal_guards,account,ticket.riskUsd);
       const check=platformRuleCheck({account,policy,market,ticket,openPositions:positions});

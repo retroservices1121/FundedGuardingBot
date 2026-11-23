@@ -57,6 +57,58 @@ describe('native trading',()=>{
   expect((result.ticket.expectedPrice-result.ticket.stopLossPrice)*result.ticket.size).toBeCloseTo(65);
   expect(auth.saveTicket).toHaveBeenCalledWith('session',result.ticket);
  });
+ it('quotes and submits the same size rounded down to the official step',async()=>{
+  const {auth,trading}=mocks();
+  vi.mocked(MfpClient.prototype.listMarkets).mockResolvedValue([
+   {id:input.marketId,size_step:0.25,size_decimals:3,trading_enabled:true,available:false},
+  ]);
+  const {ticket}=await trading.quote('session',{...input,riskUsd:1.19});
+  expect(ticket.size).toBe(1);
+  expect(MfpClient.prototype.getQuote).toHaveBeenLastCalledWith(input.marketId,input.side,1);
+  auth.claimTicket.mockResolvedValue(ticket);
+  const send=vi.spyOn(MfpClient.prototype,'placeProtectedMarketOrder').mockResolvedValue({id:'order',status:'pending'});
+  await trading.confirm('session',ticket.id);
+  expect(send).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({size:1}));
+ });
+ it('rejects a rounded size below the market minimum before requesting a size-aware quote',async()=>{
+  const {auth,trading}=mocks();
+  vi.mocked(MfpClient.prototype.listMarkets).mockResolvedValue([{id:input.marketId,size_step:0.25,min_size:1.25}]);
+  await expect(trading.quote('session',{...input,riskUsd:1.19})).rejects.toThrow('order size of at least 1.25');
+  expect(MfpClient.prototype.getQuote).toHaveBeenCalledExactlyOnceWith(input.marketId);
+  expect(auth.saveTicket).not.toHaveBeenCalled();
+ });
+ it('rejects an estimated order value below the market minimum',async()=>{
+  const {auth,trading}=mocks();
+  vi.mocked(MfpClient.prototype.listMarkets).mockResolvedValue([{id:input.marketId,size_step:0.25,min_notional:100}]);
+  vi.mocked(MfpClient.prototype.getQuote).mockResolvedValue({bid:99,ask:101,mid:100,estimated_notional:99});
+  await expect(trading.quote('session',{...input,riskUsd:1.19})).rejects.toThrow('worth at least $100');
+  expect(auth.saveTicket).not.toHaveBeenCalled();
+ });
+ it('blocks new quotes and pending confirmations when the market stops accepting openings',async()=>{
+  const {auth,trading}=await storedTickets();
+  const {ticket}=await trading.quote('session',input);
+  await trading.quote('session',quickInput);
+  vi.mocked(MfpClient.prototype.listMarkets).mockResolvedValue([
+   {id:input.marketId,size_step:0.25,trading_enabled:false,available:true},
+  ]);
+  vi.mocked(MfpClient.prototype.getQuote).mockClear();
+  auth.saveTicket.mockClear();
+  const send=vi.spyOn(MfpClient.prototype,'placeProtectedMarketOrder');
+  await expect(trading.quote('session',input)).rejects.toThrow('closed to new orders');
+  await expect(trading.confirm('session',ticket.id)).rejects.toThrow('closed to new orders');
+  await expect(trading.quick('session',quickInput)).rejects.toThrow('closed to new orders');
+  expect(MfpClient.prototype.getQuote).not.toHaveBeenCalled();
+  expect(auth.saveTicket).not.toHaveBeenCalled();
+  expect(send).not.toHaveBeenCalled();
+ });
+ it('requires a new quote when the market step changes',async()=>{
+  const {trading}=await storedTickets();
+  const {ticket}=await trading.quote('session',{...input,riskUsd:1.1});
+  vi.mocked(MfpClient.prototype.listMarkets).mockResolvedValue([{id:input.marketId,size_step:0.25}]);
+  const send=vi.spyOn(MfpClient.prototype,'placeProtectedMarketOrder');
+  await expect(trading.confirm('session',ticket.id)).rejects.toThrow('allowed order size changed');
+  expect(send).not.toHaveBeenCalled();
+ });
  it('does not submit twice when a quote has already been claimed',async()=>{
   const {auth,trading}=mocks();auth.claimTicket.mockResolvedValue(undefined);auth.ticketResult.mockResolvedValue({submitted_at:new Date(),payload:{accountId:'account-a'}});
   const send=vi.spyOn(MfpClient.prototype,'placeProtectedMarketOrder');
