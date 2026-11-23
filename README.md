@@ -82,7 +82,7 @@ The Mini App refreshes authenticated account data automatically every 20 seconds
 
 Passed evaluation accounts remain visible in the account selector as read-only records. Their Home view links to MyFundedPerps for the official certificate and funding steps, and offers a separately branded Guardian celebration PNG. Guardian only creates the PNG when the public account API reports `stage: evaluation` and `status: passed`; the public API does not supply the official certificate or a verified pass date. Failed accounts remain hidden.
 
-The Guardian monitor checks connected accounts every 90 seconds by default. Set `GUARDIAN_MONITOR_SECONDS` between 30 and 3,600 seconds to adjust the interval. MyFundedPerps does not currently expose private account WebSocket events, so account alerts use authenticated REST reads while public prices and candles continue to use the public market stream.
+The Guardian monitor checks connected accounts every 90 seconds by default. Set `GUARDIAN_MONITOR_SECONDS` between 30 and 3,600 seconds to adjust the interval. MyFundedPerps now documents a private account WebSocket, which Funded Guardian does not yet use. Account alerts use authenticated REST reads, and public prices and candles use the public market stream. [MyFundedPerps account streaming docs](https://docs.myfundedperpetuals.com/account-streaming.md)
 
 The Mini App requires HTTPS when opened through Telegram. Its API accepts only fresh Telegram-signed launch data. MyFundedPerps credentials are decrypted only on the server and are never returned to browser code.
 
