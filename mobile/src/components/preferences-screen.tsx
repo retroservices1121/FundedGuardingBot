@@ -1,3 +1,4 @@
+import { screenErrorMessage } from '../lib/screen-error';
 import PulseNotifications from './PulseNotifications';
 import { Link } from 'expo-router';
 import { useIsFocused } from 'expo-router/react-navigation';
@@ -16,7 +17,7 @@ const informationLinks = [
 export default function Settings(){
  const focused=useIsFocused();const {user,token,request,busy,leave,error,demo,setQuickTradeOff}=useSession();const [mode,setMode]=useState('off'),[max,setMax]=useState(''),[percent,setPercent]=useState(''),[notice,setNotice]=useState(''),[loading,setLoading]=useState(true),[saving,setSaving]=useState(false),[ready,setReady]=useState(false),[quickEnabled,setQuickEnabled]=useState(false),[amounts,setAmounts]=useState(['10','50','100']);
  const savingRef=useRef(false);
- useEffect(()=>{if(!focused)return;let mounted=true;request('guards','GET',undefined,token).then(value=>{if(mounted){setQuickEnabled(value.quickTradeEnabled===true);setAmounts((value.quickAmounts??[10,50,100]).map(String));setMode(value.mode);setMax(value.maxRiskUsd==null?'':String(value.maxRiskUsd));setPercent(value.lossRoomPercent==null?'':String(value.lossRoomPercent));setReady(true);}}).catch(e=>{if(mounted)setNotice(e.message);}).finally(()=>{if(mounted)setLoading(false);});return()=>{mounted=false;};},[request,token,focused]);
+ useEffect(()=>{if(!focused)return;let mounted=true;request('guards','GET',undefined,token).then(value=>{if(mounted){setQuickEnabled(value.quickTradeEnabled===true);setAmounts((value.quickAmounts??[10,50,100]).map(String));setMode(value.mode);setMax(value.maxRiskUsd==null?'':String(value.maxRiskUsd));setPercent(value.lossRoomPercent==null?'':String(value.lossRoomPercent));setReady(true);}}).catch(e=>{if(mounted)setNotice(screenErrorMessage(e,'Could not load your trading preferences.'));}).finally(()=>{if(mounted)setLoading(false);});return()=>{mounted=false;};},[request,token,focused]);
  async function save(){
   if(savingRef.current)return;
   if([max,percent,...amounts].some(v=>v.trim()&&(!Number.isFinite(Number(v))||Number(v)<=0))){setNotice('Enter positive numeric limits or leave them blank.');return;}
@@ -48,7 +49,7 @@ export default function Settings(){
  <Pressable accessibilityRole="button" disabled={!ready||saving||loading} onPress={()=>void save()} style={styles.option}><Text style={styles.link}>{loading?'Loading…':saving?'Saving…':'Save trading preferences'}</Text></Pressable>{!!notice&&<Text accessibilityRole="alert" style={styles.copy}>{notice}</Text>}
  <PulseNotifications/><AccountOnboarding token={token} request={request} showDashboard={false}/><Text style={styles.copy}>{demo?'Demo session · Settings apply only to this demonstration.':`Signed in with ${user.provider==='apple'?'Apple':user.provider==='email'?'email':'Google'}.`}</Text>
  <Pressable accessibilityRole="button" disabled={busy} onPress={()=>void leave()}><Text style={styles.link}>{demo?'Exit demo':'Sign out'}</Text></Pressable>
- {!demo&&<Pressable accessibilityRole="button" disabled={busy} onPress={()=>Alert.alert('Delete Guardian account?','This removes your native login, saved API key and sessions. It does not close your MyFundedPerps positions.',[{text:'Cancel',style:'cancel'},{text:'Delete',style:'destructive',onPress:()=>void leave(true)}])}><Text style={styles.error}>Delete Guardian account</Text></Pressable>}{!!error&&<Text style={styles.error}>{error}</Text>}
+ {!demo&&<Pressable accessibilityRole="button" disabled={busy} onPress={()=>Alert.alert('Delete Guardian account?','This removes your Guardian sign-in and saved connection key. It does not close your MyFundedPerps positions.',[{text:'Cancel',style:'cancel'},{text:'Delete',style:'destructive',onPress:()=>void leave(true)}])}><Text style={styles.error}>Delete Guardian account</Text></Pressable>}{!!error&&<Text style={styles.error}>{error}</Text>}
  <View>
   {informationLinks.map(({label,url})=><Pressable key={url} accessibilityRole="link" onPress={()=>void Linking.openURL(url).catch(()=>Alert.alert('Could not open this page','Please try again.'))}><Text style={styles.link}>{label}</Text></Pressable>)}
  </View>

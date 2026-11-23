@@ -1,3 +1,4 @@
+import { screenErrorMessage } from '../../lib/screen-error';
 import { orderResultMessage, TradeWriteUncertainError, TradeWriteValidationError } from '../../lib/trade-write';
 import { TradeWriteNotice } from '../../components/trade-write-notice';
 import { useIsFocused } from 'expo-router/react-navigation';
@@ -22,7 +23,7 @@ export default function Trade(){
  const [quickPrefs,setQuickPrefs]=useState<{quickTradeEnabled?:boolean;quickAmounts?:number[]}|null>(null);
  const quickEnabled=quickPrefs?.quickTradeEnabled===true&&!quickTradeOff;
  const pending=useRef(false),[submitted,setSubmitted]=useState(false);
- useEffect(()=>{let mounted=true;request('markets','GET',undefined,token).then(result=>{if(mounted)setMarkets(result.markets);}).catch(e=>{if(mounted)setError(e.message);});return()=>{mounted=false;};},[request,token]);
+ useEffect(()=>{let mounted=true;request('markets','GET',undefined,token).then(result=>{if(mounted)setMarkets(result.markets);}).catch(e=>{if(mounted)setError(screenErrorMessage(e,'Could not load markets.'));});return()=>{mounted=false;};},[request,token]);
  useEffect(()=>{if(!ticket)return;const timer=setInterval(()=>setNow(Date.now()),1000);return()=>clearInterval(timer);},[ticket]);
  // Navigation can select another market while this tab remains mounted.
  // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -43,15 +44,16 @@ export default function Trade(){
     [`${order.side==='buy'?'Long':'Short'} ${market.symbol} · ${market.provider}`,
      `Size ${order.size} · ${order.leverage}x leverage · ${money(order.riskUsd)} at risk`,
      `Take profit ${money(order.takeProfitPrice)}\nStop loss ${money(order.stopLossPrice)}`,
+     ...(quote.dryRun?['No order will be sent.']:[]),
      ...(order.exitReplacement?[exitReplacementMessage]:[]),...warnings].join('\n'),
     [{text:'Cancel',style:'cancel',onPress:()=>resolve(false)},{text:quote.dryRun?'Confirm':'Submit order',onPress:()=>resolve(true)}],
     {cancelable:true,onDismiss:()=>resolve(false)},
    ));
    if(!accepted||!navigation.isFocused())return;
    const value=await request('trade/quick','POST',{requestId},token);
-   setResult(value.dryRun?'Practice order checked. No order was sent.':orderResultMessage(value));
+   setResult(orderResultMessage(value));
   }
-  catch(e){if(!(e instanceof TradeWriteUncertainError))setError(e instanceof Error?e.message:'Could not submit trade.');}
+  catch(e){if(!(e instanceof TradeWriteUncertainError))setError(screenErrorMessage(e,'Could not submit trade.'));}
   finally{pending.current=false;setBusy(false);}
  }
  const market=markets?.find(m=>m.id===marketId);
@@ -61,7 +63,7 @@ export default function Trade(){
  async function review(){
   if(pending.current||writeState!=='ready')return;if(missing){setError(missing);return;}pending.current=true;setBusy(true);setError('');setResult('');
   try{const value=await request('trade/quote','POST',{marketId,side,riskUsd:Number(risk),leverage:Number(leverage),stopPercent:Number(stop),rewardRisk:Number(reward),reviewExitReplacement:true},token);setTicket(value.ticket);setAccountName(value.accountName);setDryRun(value.dryRun);setSubmitted(false);setNow(Date.now());}
-  catch(e){setError(e instanceof Error?e.message:'Could not quote trade.');}
+  catch(e){setError(screenErrorMessage(e,'Could not quote trade.'));}
   finally{pending.current=false;setBusy(false);}
  }
  async function confirm(){
@@ -69,7 +71,7 @@ export default function Trade(){
   try{const value=await request('trade/confirm','POST',{ticketId:ticket.id},token);setResult(orderResultMessage(value));setTicket(null);}
   catch(e){
    if(e instanceof TradeWriteValidationError)setTicket(null);
-   if(!(e instanceof TradeWriteUncertainError))setError(e instanceof Error?e.message:'Submission could not be confirmed. Check MyFundedPerps before placing another trade.');
+   if(!(e instanceof TradeWriteUncertainError))setError(screenErrorMessage(e,'Submission could not be confirmed. Check MyFundedPerps before placing another trade.'));
   }
   finally{pending.current=false;setBusy(false);}
  }
@@ -80,13 +82,13 @@ export default function Trade(){
   {!!result&&<Text accessibilityRole="alert" style={styles.success}>{result}</Text>}
   {ticket?<View style={styles.card}>
    <Text style={styles.heading}>{ticket.symbol} {ticket.side==='buy'?'Long':'Short'}</Text><Text style={styles.copy}>{accountName}</Text>
-   <Text style={styles.copy}>{dryRun?'Dry run only. No order will be sent.':'Confirmation sends a market order with attached TP and SL.'}</Text>
-   {([['Risk at stop',money(ticket.riskUsd)],['Size',String(ticket.size)],['Leverage',`${ticket.leverage}x`],['Estimated entry',money(ticket.expectedPrice)],['Stop loss',money(ticket.stopLossPrice)],['Take profit',money(ticket.takeProfitPrice)],['Potential profit at TP',money(Math.abs(ticket.takeProfitPrice-ticket.expectedPrice)*ticket.size)],['Estimated notional',money(ticket.estimatedNotional)],['Estimated entry fee',money(ticket.estimatedFee)],['Estimated margin + entry fee',money(ticket.platformRules?.estimatedMargin)]] as const).map(([label,value])=><View key={label} style={styles.row}><Text style={styles.copy}>{label}</Text><Text style={styles.value}>{value}</Text></View>)}
+   <Text style={styles.copy}>{dryRun?'Practice order. No order will be sent.':'Confirmation sends a market order with a take profit and stop loss.'}</Text>
+   {([['Risk at stop',money(ticket.riskUsd)],['Size',String(ticket.size)],['Leverage',`${ticket.leverage}x`],['Estimated entry',money(ticket.expectedPrice)],['Stop loss',money(ticket.stopLossPrice)],['Take profit',money(ticket.takeProfitPrice)],['Potential profit at take profit',money(Math.abs(ticket.takeProfitPrice-ticket.expectedPrice)*ticket.size)],['Estimated notional',money(ticket.estimatedNotional)],['Estimated entry fee',money(ticket.estimatedFee)],['Estimated margin + entry fee',money(ticket.platformRules?.estimatedMargin)]] as const).map(([label,value])=><View key={label} style={styles.row}><Text style={styles.copy}>{label}</Text><Text style={styles.value}>{value}</Text></View>)}
    <Text style={styles.small}>Risk at stop excludes fees and slippage. Stop execution may differ from the stop price.</Text>
    {!!ticket.exitReplacement&&<Text style={styles.warning}>{exitReplacementMessage}</Text>}
    {ticket.platformRules?.warnings.map(w=><Text key={w} style={styles.warning}>{w}</Text>)}
    {!submitted&&<Text style={styles.copy}>{expired?'Quote expired. Review again.':`Quote expires in ${Math.max(0,Math.ceil((ticket.expiresAt-now)/1000))} seconds.`}</Text>}
-   <Pressable accessibilityRole="button" disabled={busy||expired||submitted||writeState!=='ready'} style={[styles.button,(busy||expired||submitted||writeState!=='ready')&&styles.disabled]} onPress={()=>Alert.alert(dryRun?'Validate dry run?':'Confirm order?',[`${ticket.symbol} ${ticket.side==='buy'?'Long':'Short'} on ${accountName}`,...(ticket.exitReplacement?[exitReplacementMessage]:[])].join('\n'), [{text:'Cancel',style:'cancel'},{text:dryRun?'Validate':'Submit order',onPress:()=>void confirm()}])}><Text style={styles.buttonText}>{submitted?'Submission attempted':dryRun?'Validate dry run':'Confirm trade'}</Text></Pressable>
+   <Pressable accessibilityRole="button" disabled={busy||expired||submitted||writeState!=='ready'} style={[styles.button,(busy||expired||submitted||writeState!=='ready')&&styles.disabled]} onPress={()=>Alert.alert(dryRun?'Confirm practice order?':'Confirm order?',[`${ticket.symbol} ${ticket.side==='buy'?'Long':'Short'} on ${accountName}`,...(dryRun?['No order will be sent.']:[]),...(ticket.exitReplacement?[exitReplacementMessage]:[])].join('\n'), [{text:'Cancel',style:'cancel'},{text:dryRun?'Confirm practice order':'Submit order',onPress:()=>void confirm()}])}><Text style={styles.buttonText}>{submitted?'Submission attempted':dryRun?'Confirm practice order':'Confirm trade'}</Text></Pressable>
    <Pressable accessibilityRole="button" disabled={busy||writeState!=='ready'} onPress={()=>{setTicket(null);setError('');}}><Text style={styles.link}>Back to trade inputs</Text></Pressable>
   </View>:<>
    <TextInput accessibilityLabel="Search markets or venues" placeholder="Search markets or venues" placeholderTextColor="#82968b" style={styles.input} value={search} onChangeText={v=>{setSearch(v);setSelector(true);}} autoCorrect={false}/>

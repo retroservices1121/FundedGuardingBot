@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createMobileRequest, SessionError } from '../src/lib/mobile-request';
+import { createMobileRequest, serverUnavailableMessage, SessionError } from '../src/lib/mobile-request';
+import { screenErrorMessage } from '../src/lib/screen-error';
 import { TradeWriteUncertainError, TradeWriteValidationError } from '../src/lib/trade-write';
 
 const request = createMobileRequest('https://guardian.example');
@@ -35,6 +36,24 @@ describe('mobile requests', () => {
       .mockResolvedValueOnce(new Response('{"error":"Connect MyFundedPerps first."}', {status:400})));
     await expect(request('dashboard')).resolves.toEqual({ok:true});
     await expect(request('dashboard')).rejects.toThrow('Connect MyFundedPerps first.');
+  });
+
+  it.each(['HTTP 502 from guardian://account', '401 Unauthorized', 'TypeError: undefined', 'Missing TEST_SETTING', '{"detail":"unexpected response"}'])('hides technical server errors (%s)', async error => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json({error}, {status:502})));
+    await expect(request('dashboard')).rejects.toThrow('Guardian sent an unexpected reply.');
+  });
+
+  it('gives plain-language guidance when an account key is invalid', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json({error:'Paste a key beginning fp_live_ or fp_test_.'}, {status:400})));
+    await expect(request('connect', 'POST')).rejects.toThrow('Paste the key you copied from MyFundedPerps.');
+  });
+
+  it('uses a friendly message when the server address is missing', async () => {
+    await expect(createMobileRequest()('me')).rejects.toThrow(serverUnavailableMessage);
+  });
+
+  it('does not display raw errors from device libraries', () => {
+    expect(screenErrorMessage(new Error('Native module failed'), 'Could not sign in.')).toBe('Could not sign in.');
   });
 
   it('uses a friendly connection error when fetch fails', async () => {

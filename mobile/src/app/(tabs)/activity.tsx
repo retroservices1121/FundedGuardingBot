@@ -1,3 +1,4 @@
+import { screenErrorMessage } from '../../lib/screen-error';
 import { orderResultMessage, TradeWriteUncertainError } from '../../lib/trade-write';
 import { TradeWriteNotice } from '../../components/trade-write-notice';
 import { router } from 'expo-router';
@@ -17,7 +18,7 @@ export default function Activity(){
  const refresh=useRef<(()=>Promise<void>)|null>(null),pending=useRef(false);
  useEffect(()=>{
   if(!focused)return;let mounted=true,inFlight=false,timer:ReturnType<typeof setTimeout>|undefined;
-  async function load(){if(inFlight||!mounted||AppState.currentState==='background')return;inFlight=true;setBusy(true);try{const result=await request('activity','GET',undefined,token);if(mounted){setData(result);setError('');}}catch(e){if(mounted)setError(e instanceof Error?e.message:'Could not refresh positions.');}finally{inFlight=false;if(mounted){setBusy(false);if(timer)clearTimeout(timer);timer=setTimeout(()=>void load(),20000);}}}
+  async function load(){if(inFlight||!mounted||AppState.currentState==='background')return;inFlight=true;setBusy(true);try{const result=await request('activity','GET',undefined,token);if(mounted){setData(result);setError('');}}catch(e){if(mounted)setError(screenErrorMessage(e,'Could not refresh positions.'));}finally{inFlight=false;if(mounted){setBusy(false);if(timer)clearTimeout(timer);timer=setTimeout(()=>void load(),20000);}}}
   refresh.current=load;void load();const listener=AppState.addEventListener('change',state=>{if(state==='active')void load();else if(timer)clearTimeout(timer);});
   return()=>{mounted=false;refresh.current=null;listener.remove();if(timer)clearTimeout(timer);};
  },[focused,token,request]);
@@ -58,8 +59,8 @@ export default function Activity(){
  async function prepareClose(position:Position,percent:number){
   if(pending.current||writeState!=='ready')return;pending.current=true;setAction(true);setError('');setNotice('');
   try{const result=await request('close/quote','POST',{positionId:position.id,percent},token),ticket:Quote=result.ticket;
-   Alert.alert(`${result.dryRun?'Dry run: ':''}Close ${percent}% of ${ticket.symbol}?`,`Size: ${ticket.size??ticket.originalSize}\nEstimated price: ${money(ticket.expectedPrice)}\nEstimated close fee: ${money(ticket.estimatedFee)}\n\n${result.dryRun?'No order will be sent.':'This sends a reduce-only market close. MFP may resize or cancel working TP/SL orders.'}`,[{text:'Keep position',style:'cancel'},{text:result.dryRun?'Validate':'Confirm close',style:'destructive',onPress:()=>void confirmClose(ticket)}]);
-  }catch(e){setError(e instanceof Error?e.message:'Could not quote close.');}
+   Alert.alert(result.dryRun?`Practice closing ${percent}% of ${ticket.symbol}?`:`Close ${percent}% of ${ticket.symbol}?`,`Size: ${ticket.size??ticket.originalSize}\nEstimated price: ${money(ticket.expectedPrice)}\nEstimated close fee: ${money(ticket.estimatedFee)}\n\n${result.dryRun?'No order will be sent.':'This sends a market order that can only reduce or close your position. MyFundedPerps may resize or cancel existing take-profit and stop-loss orders.'}`,[{text:'Keep position',style:'cancel'},{text:result.dryRun?'Confirm practice close':'Confirm close',style:'destructive',onPress:()=>void confirmClose(ticket)}]);
+  }catch(e){setError(screenErrorMessage(e,'Could not quote close.'));}
   finally{pending.current=false;setAction(false);}
  }
  async function confirmClose(ticket:Quote){
@@ -68,7 +69,7 @@ export default function Activity(){
   if(pending.current||writeState!=='ready')return;if(Date.now()>=ticket.expiresAt){setError('Close quote expired. Review a new close quote.');return;}
   pending.current=true;setAction(true);setError('');
   try{const result=await request('close/confirm','POST',{ticketId:ticket.id},token);setNotice(orderResultMessage(result,true));await refresh.current?.();}
-  catch(e){if(!(e instanceof TradeWriteUncertainError))setError(e instanceof Error?e.message:'Could not confirm close.');}
+  catch(e){if(!(e instanceof TradeWriteUncertainError))setError(screenErrorMessage(e,'Could not confirm close.'));}
   finally{pending.current=false;setAction(false);}
  }
  const positions=data?.[tab]??[];
@@ -82,12 +83,12 @@ export default function Activity(){
    const mark=tick?.price??p.markPrice,pnl=tab==='closed'?p.realized_pnl:mark!=null?(mark-p.entry_price)*Math.abs(p.size)*(p.side==='long'?1:-1):p.estimatedUnrealizedPnl;
    return <View key={p.id} style={styles.card}>
    <Pressable accessibilityRole="button" accessibilityLabel={`Open ${p.symbol??p.coin} market chart`} disabled={tab!=='open'} onPress={()=>router.push({pathname:'/trade',params:{marketId:p.market_id}})}><View style={styles.row}><Text style={styles.symbol}>{p.symbol??p.coin}</Text><Text style={styles.copy}>{p.side.toUpperCase()} · {p.leverage}x</Text></View>{tab==='open'&&<Text style={styles.green}>View market chart ↗</Text>}<Text style={[styles.pnl,{color:pnl===undefined?'#a9bbb2':pnl>=0?'#71e6b8':'#ff9c9c'}]}>{money(pnl)}</Text></Pressable>
-   <Text style={styles.small}>{demo?'Sample P&L · Not actual performance':tab==='closed'?'MFP reported realized P&L':`Estimated P&L from ${tick?'live market prices':'last account update'} · Excludes fees`}</Text>
+   <Text style={styles.small}>{demo?'Sample P&L · Not actual performance':tab==='closed'?'Realized P&L reported by MyFundedPerps':`Estimated P&L from ${tick?'live market prices':'last account update'} · Excludes fees`}</Text>
    <View style={styles.row}><Text style={styles.copy}>Entry</Text><Text style={styles.value}>{money(p.entry_price)}</Text></View>
    <View style={styles.row}><Text style={styles.copy}>{tab==='open'?'Mark / mid':'Exit'}</Text><Text style={styles.value}>{money(tab==='open'?mark:p.exit_price)}</Text></View>
    <View style={styles.row}><Text style={styles.copy}>{tab==='open'?'Estimated close fee':'Reported fees'}</Text><Text style={styles.value}>{money(tab==='open'?p.estimatedCloseFee:p.fees)}</Text></View>
    <Text style={styles.small}>Size {p.size}</Text>
-   <Pressable accessibilityRole="button" disabled={action} onPress={()=>router.push({pathname:tab==='open'?'/protection':'/share-card',params:{positionId:p.id}})}><Text style={styles.green}>{tab==='open'?'Edit TP/SL':'Create share card'}</Text></Pressable>
+   <Pressable accessibilityRole="button" disabled={action} onPress={()=>router.push({pathname:tab==='open'?'/protection':'/share-card',params:{positionId:p.id}})}><Text style={styles.green}>{tab==='open'?'Edit exit orders':'Create share card'}</Text></Pressable>
    {tab==='open'?<View style={styles.row}>{[25,50,100].map(percent=><Pressable key={percent} accessibilityRole="button" disabled={action||busy||writeState!=='ready'} style={styles.close} onPress={()=>void prepareClose(p,percent)}><Text style={styles.value}>{percent===100?'Close all':`Close ${percent}%`}</Text></Pressable>)}</View>:p.closed_at!=null&&<Text style={styles.small}>{new Date(p.closed_at<1e10?p.closed_at*1000:p.closed_at).toLocaleString()}</Text>}
   </View>})}
   {data&&<Text style={styles.small}>{tab==='closed'?'Latest 50 closed positions. ':''}Account data updated {new Date(data.updatedAt).toLocaleTimeString()}.</Text>}

@@ -1,3 +1,4 @@
+import { screenErrorMessage } from '../lib/screen-error';
 import { useEffect, useState } from 'react';
 import { ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useSession } from '../../App';
@@ -7,7 +8,7 @@ const money=(v?:number)=>typeof v==='number'&&Number.isFinite(v)?new Intl.Number
 export default function Learn(){
  const {token,request}=useSession();const [account,setAccount]=useState<any>(null),[error,setError]=useState('');
  const [margin,setMargin]=useState(''),[leverage,setLeverage]=useState(''),[stop,setStop]=useState(''),[target,setTarget]=useState('');
- useEffect(()=>{let mounted=true;request('dashboard','GET',undefined,token).then(value=>{if(mounted)setAccount(value);}).catch(e=>{if(mounted)setError(e.message);});return()=>{mounted=false;};},[request,token]);
+ useEffect(()=>{let mounted=true;request('dashboard','GET',undefined,token).then(value=>{if(mounted)setAccount(value);}).catch(e=>{if(mounted)setError(screenErrorMessage(e,'Could not load your account progress.'));});return()=>{mounted=false;};},[request,token]);
  const result=simulateTrade(Number(margin),Number(leverage),Number(stop),Number(target));
  return <ScrollView showsVerticalScrollIndicator={false} showsHorizontalScrollIndicator={false} style={styles.page} contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled"><Text style={styles.title}>Understand your trade</Text><Text style={styles.copy}>A practice calculator. No orders are sent and your account is unchanged.</Text>{account&&<Text style={styles.copy}>{account.account.name??'Selected account'} · {account.account.stage??'Active'} · Equity {money(account.risk.equity)}</Text>}{!!error&&<Text style={styles.warning}>{error} You can still explore the calculator.</Text>}
  {([['Margin to allocate ($)',margin,setMargin],['Leverage (x)',leverage,setLeverage],['Stop distance (%)',stop,setStop],['Target distance (%)',target,setTarget]] as const).map(([label,value,set])=><View key={label}><Text style={styles.label}>{label}</Text><TextInput accessibilityLabel={label} keyboardType="decimal-pad" value={value} onChangeText={set} style={styles.input} placeholder="Enter amount" placeholderTextColor="#82968b"/></View>)}

@@ -1,3 +1,4 @@
+import { ScreenError } from '../lib/screen-error';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import * as SecureStore from 'expo-secure-store';
 import { parseConfirmRetry, TradeWriteUncertainError, TradeWriteValidationError, type ConfirmRetry } from '../lib/trade-write';
@@ -64,7 +65,7 @@ export function useTradeWriteLock() {
 
   const run = useCallback(async <T,>(send: () => Promise<T>, intent?: string | ConfirmRetry): Promise<T> => {
     if (current.current === 'uncertain') throw new TradeWriteUncertainError();
-    if (current.current !== 'ready') throw new Error('An account request is already being checked.');
+    if (current.current !== 'ready') throw new ScreenError('An account request is already being checked.');
     update('pending');
     // Save the original ticket before sending so it can be checked after an app restart.
     const recovery = typeof intent === 'object' ? intent : undefined;

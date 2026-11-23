@@ -1,3 +1,4 @@
+import { screenErrorMessage } from '../../lib/screen-error';
 import { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, AppState, FlatList, Linking, Pressable, RefreshControl, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -10,7 +11,7 @@ export default function Pulse(){
  const refresh=useRef<(()=>Promise<void>)|null>(null);
  useEffect(()=>{
   if(!focused)return;let mounted=true,inFlight=false,timer:ReturnType<typeof setTimeout>|undefined;
-  async function load(){if(!mounted||inFlight||AppState.currentState==='background')return;inFlight=true;setBusy(true);try{const result=await request('pulse','GET',undefined,token);if(mounted){setItems(result.items);setLoaded(true);setError('');}}catch(e){if(mounted)setError(e instanceof Error?e.message:'Could not refresh Pulse.');}finally{inFlight=false;if(mounted){setBusy(false);if(timer)clearTimeout(timer);timer=setTimeout(()=>void load(),60000);}}}
+  async function load(){if(!mounted||inFlight||AppState.currentState==='background')return;inFlight=true;setBusy(true);try{const result=await request('pulse','GET',undefined,token);if(mounted){setItems(result.items);setLoaded(true);setError('');}}catch(e){if(mounted)setError(screenErrorMessage(e,'Could not refresh Pulse.'));}finally{inFlight=false;if(mounted){setBusy(false);if(timer)clearTimeout(timer);timer=setTimeout(()=>void load(),60000);}}}
   refresh.current=load;void load();const listener=AppState.addEventListener('change',state=>{if(state==='active')void load();else if(timer)clearTimeout(timer);});
   return()=>{mounted=false;refresh.current=null;listener.remove();if(timer)clearTimeout(timer);};
  },[focused,token,request]);

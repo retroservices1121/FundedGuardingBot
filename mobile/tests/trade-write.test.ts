@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isTradeCheck, isTradeWrite, orderResultMessage, parseConfirmRetry, tradeWriteResult, TradeWriteUncertainError, TradeWriteValidationError } from '../src/lib/trade-write';
+import { isTradeCheck, isTradeWrite, orderResultMessage, parseConfirmRetry, protectionResultMessage, tradeWriteResult, TradeWriteUncertainError, TradeWriteValidationError } from '../src/lib/trade-write';
 
 describe('trade write responses', () => {
   it('tracks all four write paths and allows review requests', () => {
@@ -12,7 +12,9 @@ describe('trade write responses', () => {
 
   it('preserves confirmed validation messages and valid write results', () => {
     expect(() => tradeWriteResult(false,400,{error:'Review a new quote.',uncertain:false}))
-      .toThrow(TradeWriteValidationError);
+      .toThrow(new TradeWriteValidationError('Review a new quote.'));
+    expect(() => tradeWriteResult(false,422,{error:'SDK error',uncertain:false}))
+      .toThrow(new TradeWriteValidationError('The request was rejected. Review the details before trying again.'));
     expect(tradeWriteResult(true,200,{dryRun:false,status:'pending'})).toEqual({dryRun:false,status:'pending'});
   });
 
@@ -28,6 +30,17 @@ describe('trade write responses', () => {
   it('shows the recovered outcome, including a rejected close', () => {
     expect(orderResultMessage({dryRun:false,status:'filled'})).toBe('MyFundedPerps filled the order.');
     expect(orderResultMessage({dryRun:false,status:'rejected'},true)).toBe('MyFundedPerps rejected the close order.');
+  });
+
+  it('explains practice outcomes without suggesting an order was sent', () => {
+    const practice = {dryRun:true,status:'validated'};
+    expect(orderResultMessage(practice)).toBe('Practice order complete. No order was sent.');
+    expect(orderResultMessage(practice,true)).toBe('Practice close complete. No order was sent.');
+    expect(protectionResultMessage(practice)).toBe('Practice edit complete. No orders were sent.');
+  });
+
+  it('does not show raw exit-order statuses', () => {
+    expect(protectionResultMessage({dryRun:false,status:'HTTP 502'})).toBe('Check MyFundedPerps for the latest on your exit orders.');
   });
 
   it.each([

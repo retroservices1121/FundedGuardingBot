@@ -1,3 +1,4 @@
+import { screenErrorMessage } from '../lib/screen-error';
 import { useIsFocused } from 'expo-router/react-navigation';
 import { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, AppState, Pressable, StyleSheet, Text, View } from 'react-native';
@@ -33,7 +34,7 @@ export default function AccountDashboard({token,accountId,request}:Props) {
       if(inFlight||!mounted||AppState.currentState==='background') return;
       inFlight=true;setBusy(true);
       try {const result:Data=await request('dashboard','GET',undefined,token);if(mounted){setData(result);setError('');interval=Math.max(10000,result.refreshSeconds*1000||20000);}}
-      catch(e){if(mounted)setError(e instanceof Error?e.message:'Could not refresh.');}
+      catch(e){if(mounted)setError(screenErrorMessage(e,'Could not refresh.'));}
       finally {inFlight=false;if(mounted){setBusy(false);if(timer)clearTimeout(timer);timer=setTimeout(()=>void load(),interval);}}
     }
     refresh.current=load;

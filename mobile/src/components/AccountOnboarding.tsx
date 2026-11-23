@@ -1,3 +1,4 @@
+import { screenErrorMessage } from '../lib/screen-error';
 import {DEMO_TOKEN} from '../lib/demo-session';
 import { Link, router } from 'expo-router';
 import AccountDashboard from './account-dashboard';
@@ -17,7 +18,7 @@ export default function AccountOnboarding({ token, request,manage=true,showDashb
   useEffect(() => {
     let mounted = true;
     request('connection','GET',undefined,token).then(value => { if (mounted) setConnection(value); })
-      .catch(e => { if (mounted) setError(e.message ?? 'Could not load your connection.'); });
+      .catch(e => { if (mounted) setError(screenErrorMessage(e,'Could not load your connection.')); });
     return () => { mounted = false; };
   }, [token, request]);
   async function act(action: 'connect' | 'refresh' | 'select' | 'disconnect', id?: string) {
@@ -34,14 +35,14 @@ export default function AccountOnboarding({ token, request,manage=true,showDashb
       } else if (action === 'disconnect') {
         await request('connection','DELETE',undefined,token); setConnection({connected:false});
       } else setConnection(await request('connection','GET',undefined,token));
-    } catch (e) { setError(e instanceof Error ? e.message : 'Could not save. Please try again.'); }
+    } catch (e) { setError(screenErrorMessage(e,'Could not save. Please try again.')); }
     finally { pending.current = false; setBusy(false); }
   }
   return <ScrollView showsVerticalScrollIndicator={false} showsHorizontalScrollIndicator={false} style={styles.scroll} keyboardShouldPersistTaps="handled" contentContainerStyle={styles.content}>
     <Text style={styles.heading}>{connection?.connected ? 'Choose your account' : 'Connect MyFundedPerps'}</Text>
     {connection?.connected ? <>
       {showDashboard&&connection.selectedAccountId && <AccountDashboard key={connection.selectedAccountId} token={token} accountId={connection.selectedAccountId} request={request} />}
-      <Text style={styles.copy}>{demo?'Sample account. No API key is connected; trade reviews are local demonstrations.':`API key connected, ending in ${connection.keyLastFour}. Select the active account you want to use.`}</Text>
+      <Text style={styles.copy}>{demo?'Sample account. You can practice without sending orders.':`Key connected, ending in ${connection.keyLastFour}. Select the active account you want to use.`}</Text>
       {!connection.accounts?.length && <Text style={styles.copy}>No active accounts are currently available. Refresh after your account becomes active.</Text>}
       {connection.accounts?.map(account => <Pressable key={account.id} accessibilityRole="button" accessibilityState={{selected:connection.selectedAccountId===account.id,disabled:busy}} disabled={busy} style={[styles.account,connection.selectedAccountId===account.id && styles.selected]} onPress={() => void act('select',account.id)}>
         <Text style={styles.name}>{account.name ?? account.id}</Text>
@@ -52,15 +53,15 @@ export default function AccountOnboarding({ token, request,manage=true,showDashb
       <Text style={styles.copy}>Personal guardrails are optional and off by default. MyFundedPerps account rules still apply. Choose warnings or your own enforced limits in Settings.</Text>
       <Link href="/settings" style={styles.link}>Choose my guardrails</Link>
       <Pressable disabled={busy} accessibilityRole="button" onPress={() => void act('refresh')}><Text style={styles.link}>Refresh accounts</Text></Pressable>
-      <Pressable disabled={busy} accessibilityRole="button" onPress={() => Alert.alert('Disconnect MyFundedPerps?', 'This removes the saved API key from Guardian. Your positions remain on MyFundedPerps.',[{text:'Cancel',style:'cancel'},{text:'Disconnect',style:'destructive',onPress:()=>void act('disconnect')}])}><Text style={styles.remove}>Disconnect API key</Text></Pressable>
+      <Pressable disabled={busy} accessibilityRole="button" onPress={() => Alert.alert('Disconnect MyFundedPerps?', 'This removes the saved connection key from Guardian. Your positions remain on MyFundedPerps.',[{text:'Cancel',style:'cancel'},{text:'Disconnect',style:'destructive',onPress:()=>void act('disconnect')}])}><Text style={styles.remove}>Disconnect account</Text></Pressable>
       </>}
     </> : <>
       <Text style={styles.copy}>1. Open MyFundedPerps and sign in.</Text>
-      <Text style={styles.copy}>2. Open Settings → API Keys. Create a key named “Funded Guardian”.</Text>
-      <Text style={styles.copy}>3. Copy the secret when it appears. MyFundedPerps will not show it again.</Text>
-      <Pressable accessibilityRole="link" onPress={() => void Linking.openURL('https://myfundedperpetuals.com/settings?section=api-keys').catch(()=>setError('Could not open MyFundedPerps. Open its website and go to Settings → API Keys.'))}><Text style={styles.link}>Open MyFundedPerps API Key Settings ↗</Text></Pressable>
+      <Text style={styles.copy}>2. In MyFundedPerps settings, create a connection key named “Funded Guardian”.</Text>
+      <Text style={styles.copy}>3. Copy the key when it appears. MyFundedPerps will not show it again.</Text>
+      <Pressable accessibilityRole="link" onPress={() => void Linking.openURL('https://myfundedperpetuals.com/settings?section=api-keys').catch(()=>setError('Could not open MyFundedPerps. Open the MyFundedPerps website and look for connection keys in Settings.'))}><Text style={styles.link}>Open MyFundedPerps key settings ↗</Text></Pressable>
       <Text style={styles.copy}>4. Paste your key below. Guardian verifies it and loads your active accounts.</Text>
-      <TextInput accessibilityLabel="MyFundedPerps API key" secureTextEntry autoCapitalize="none" autoCorrect={false} textContentType="none" placeholder="fp_live_…" placeholderTextColor="#82968b" value={apiKey} onChangeText={setApiKey} editable={!busy} style={styles.input} />
+      <TextInput accessibilityLabel="MyFundedPerps connection key" secureTextEntry autoCapitalize="none" autoCorrect={false} textContentType="none" placeholder="Paste your key" placeholderTextColor="#82968b" value={apiKey} onChangeText={setApiKey} editable={!busy} style={styles.input} />
       <Text style={styles.small}>The key is sent securely to Guardian and encrypted on the server. Never share it in Telegram, screenshots, or public posts. Connecting does not place a trade.</Text>
       <Pressable accessibilityRole="button" disabled={busy || !apiKey.trim()} style={[styles.button,(busy||!apiKey.trim())&&styles.disabled]} onPress={()=>void act('connect')}><Text style={styles.buttonText}>Connect account</Text></Pressable>
       {!connection && !error && <ActivityIndicator color="#2dcc98" />}

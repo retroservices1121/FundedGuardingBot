@@ -1,3 +1,4 @@
+import { screenErrorMessage } from '../../lib/screen-error';
 import {demoMarketFeed} from '../../lib/demo-session';
 import * as SecureStore from 'expo-secure-store';
 import MarketLogo from '../../components/market-logo';
@@ -18,7 +19,7 @@ export default function Markets(){
  useEffect(()=>{let mounted=true;SecureStore.getItemAsync(favoriteKey).then(raw=>{if(!mounted)return;let items:string[]=[];try{const value=JSON.parse(raw??'[]');if(Array.isArray(value))items=value.filter(v=>typeof v==='string');}catch{}favoriteRef.current=items;setFavorites(items);}).catch(()=>{}).finally(()=>{if(mounted)setFavoritesReady(true);});return()=>{mounted=false;};},[favoriteKey]);
  async function toggleFavorite(id:string){if(!favoritesReady)return;const previous=favoriteRef.current,next=previous.includes(id)?previous.filter(v=>v!==id):[...previous,id];favoriteRef.current=next;setFavorites(next);try{await SecureStore.setItemAsync(favoriteKey,JSON.stringify(next));}catch{setError('Could not save favorites on this device.');}}
  function category(m:Market){const supplied=m.category?.toLowerCase()??'',name=m.symbol.toUpperCase();if(supplied.includes('forex')||supplied==='fx')return 'fx';if(supplied.includes('commod'))return 'commodities';if(supplied.includes('stock')||supplied.includes('indice')||supplied.includes('equity'))return 'other';if(/^(GOLD|SILVER|XAU|XAG|CL|WTI|BRENT|OIL)/.test(name))return 'commodities';if(/^(EUR|GBP|JPY|AUD|CAD|CHF|NZD)$/.test(name)||/^(EUR|GBP|USD|JPY|AUD|CAD|CHF|NZD)[/_-]?(EUR|GBP|USD|JPY|AUD|CAD|CHF|NZD)$/.test(name))return 'fx';if(/^(SP500|SPCX|XYZ100|NAS100|SKHX|SNDK|NVDA|SOXL|CRCL|MU)$/.test(name))return 'other';return 'crypto';}
- const load=useCallback(async()=>{setBusy(true);try{setMarkets((await request('markets','GET',undefined,token)).markets);setError('');}catch(e){setError(e instanceof Error?e.message:'Could not load markets.');}finally{setBusy(false);}},[request,token]);
+ const load=useCallback(async()=>{setBusy(true);try{setMarkets((await request('markets','GET',undefined,token)).markets);setError('');}catch(e){setError(screenErrorMessage(e,'Could not load markets.'));}finally{setBusy(false);}},[request,token]);
  // Asynchronous market loading updates the screen after the request resolves.
  // eslint-disable-next-line react-hooks/set-state-in-effect
  useEffect(()=>{void load();},[load]);

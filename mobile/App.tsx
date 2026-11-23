@@ -11,7 +11,8 @@ import * as SecureStore from 'expo-secure-store';
 import { GoogleSignin, isSuccessResponse } from '@react-native-google-signin/google-signin';
 
 import { isTradeWrite, type ConfirmRetry } from './src/lib/trade-write';
-import { createMobileRequest, SessionError } from './src/lib/mobile-request';
+import { ScreenError, screenErrorMessage } from './src/lib/screen-error';
+import { createMobileRequest, serverUnavailableMessage, SessionError } from './src/lib/mobile-request';
 import { useTradeWriteLock } from './src/hooks/use-trade-write-lock';
 import { TRADING_DISCLAIMER } from './src/lib/app-information';
 
@@ -76,7 +77,7 @@ export default function App({ children }: { children: ReactNode }) {
       }
     } catch (e) {
       if (e instanceof SessionError) { await SecureStore.deleteItemAsync(key); setToken(null); }
-      setError(e instanceof Error ? e.message : 'Could not restore your session.');
+      setError(screenErrorMessage(e, 'Could not restore your session.'));
     } finally { setLoading(false); }
   }
   // Session hydration resolves asynchronously before updating screen state.
@@ -99,12 +100,12 @@ export default function App({ children }: { children: ReactNode }) {
         if (!isSuccessResponse(result)) return;
         idToken = result.data.idToken;
       }
-      if (!idToken) throw new Error('No sign-in token received. Please try again.');
+      if (!idToken) throw new ScreenError('Could not verify sign-in. Please try again.');
       const result = await request('login', 'POST', { provider, idToken, nonce });
       await SecureStore.setItemAsync(key, result.token);
       setToken(result.token); setUser(result.user);
     } catch (e) {
-      if ((e as { code?: string }).code !== 'ERR_REQUEST_CANCELED') setError(e instanceof Error ? e.message : 'Sign-in failed. Please try again.');
+      if ((e as { code?: string }).code !== 'ERR_REQUEST_CANCELED') setError(screenErrorMessage(e, 'Sign-in failed. Please try again.'));
     } finally { pending.current = false; setBusy(false); }
   }
   async function loginEmail() {
@@ -114,7 +115,7 @@ export default function App({ children }: { children: ReactNode }) {
       const result = await request('email-login', 'POST', { email: email.trim(), password });
       await SecureStore.setItemAsync(key, result.token);
       setPassword(''); setToken(result.token); setUser(result.user);
-    } catch (e) { setError(e instanceof Error ? e.message : 'Sign-in failed. Please try again.'); }
+    } catch (e) { setError(screenErrorMessage(e, 'Sign-in failed. Please try again.')); }
     finally { pending.current = false; setBusy(false); }
   }
   async function leave(remove = false) {
@@ -130,7 +131,7 @@ export default function App({ children }: { children: ReactNode }) {
         SecureStore.deleteItemAsync(key).catch(() => setError('Could not remove the saved sign-in from this device.')),
         logout,
       ]);
-    } catch (e) { setError(e instanceof Error ? e.message : 'Please try again.'); }
+    } catch (e) { setError(screenErrorMessage(e, 'Could not delete your Guardian account. Please try again.')); }
     finally { pending.current = false; setBusy(false); }
   }
   if (user && token && !loading) return <SessionContext.Provider value={{demo,user,token,request:demo?demoClient.request:liveRequest,writeState:demo?'ready':writeState,acknowledgeWrite,pendingConfirm,checkConfirm,quickTradeOff:quickTradeOffFor===user.id,setQuickTradeOff,busy,leave,error}}><StatusBar style="light" /><View style={{flex:1,backgroundColor:'#07120e'}}>{demo&&<SafeAreaView edges={['top']} style={{backgroundColor:'#173a2b'}}><View style={{paddingHorizontal:18,paddingVertical:8,flexDirection:'row',alignItems:'center',justifyContent:'space-between',gap:12}}><Text style={{color:'#f4f8f5',fontSize:12,flexShrink:1}}>DEMO · Sample data · No real orders</Text><Pressable accessibilityRole="button" accessibilityLabel="Exit demo" onPress={()=>void leave()} hitSlop={8} style={{padding:8}}><Text style={{color:'#2dcc98',fontWeight:'700'}}>Exit</Text></Pressable></View></SafeAreaView>}<View style={{flex:1}}>{children}</View></View></SessionContext.Provider>;
@@ -154,12 +155,12 @@ export default function App({ children }: { children: ReactNode }) {
         <TextInput accessibilityLabel="Password" placeholder="Password" placeholderTextColor="#82968b" value={password} onChangeText={setPassword} secureTextEntry autoCapitalize="none" autoCorrect={false} autoComplete="current-password" textContentType="password" maxLength={256} returnKeyType="go" onSubmitEditing={()=>void loginEmail()} style={styles.emailInput}/>
         <Pressable accessibilityRole="button" disabled={busy||!apiUrl||!email.trim()||!password} onPress={()=>void loginEmail()} style={{padding:16,borderRadius:14,alignItems:'center',backgroundColor:'#2dcc98',opacity:busy||!apiUrl||!email.trim()||!password?0.5:1}}><Text style={{color:'#07120e',fontSize:17,fontWeight:'700'}}>Sign in</Text></Pressable>
       </View>}
-      {!apiUrl && <Text style={styles.description}>Server configuration is needed before you can sign in.</Text>}
+      {!apiUrl && <Text style={styles.description}>{serverUnavailableMessage}</Text>}
     </View>}
-    {!loading&&<Pressable accessibilityRole="button" disabled={busy} onPress={enterDemo} style={{padding:16,borderRadius:14,borderWidth:1,borderColor:'#32664d',alignItems:'center',gap:6}}><Text style={{color:'#2dcc98',fontSize:17,fontWeight:'700'}}>Explore demo</Text><Text style={{color:'#a9bbb2',fontSize:12}}>Sample account · No sign-in or API key needed</Text></Pressable>}
+    {!loading&&<Pressable accessibilityRole="button" disabled={busy} onPress={enterDemo} style={{padding:16,borderRadius:14,borderWidth:1,borderColor:'#32664d',alignItems:'center',gap:6}}><Text style={{color:'#2dcc98',fontSize:17,fontWeight:'700'}}>Explore demo</Text><Text style={{color:'#a9bbb2',fontSize:12}}>Sample account · No sign-in needed</Text></Pressable>}
     {busy && <ActivityIndicator color="#2dcc98" />}
     {!!error && <Text accessibilityRole="alert" style={styles.delete}>{error}</Text>}
-    <Text style={styles.footnote}>Your login accesses your Guardian profile. Your MyFundedPerps API key is connected separately.</Text>
+    <Text style={styles.footnote}>Sign in to Guardian, then connect your MyFundedPerps account.</Text>
     <Text style={styles.footnote}>{TRADING_DISCLAIMER}</Text>
     </ScrollView>
     </KeyboardAvoidingView>

@@ -1,3 +1,5 @@
+import { ScreenError, serverErrorMessage } from './screen-error';
+
 const writePaths = new Set(['trade/confirm', 'trade/quick', 'close/confirm', 'protection/confirm']);
 
 export const isTradeWrite = (path: string, method: string) => method === 'POST' && writePaths.has(path);
@@ -15,7 +17,7 @@ export function parseConfirmRetry(value: string | null): ConfirmRetry | undefine
 }
 
 export function orderResultMessage({dryRun,status}: {dryRun:boolean; status:string}, close = false) {
-  if (dryRun) return close ? 'Dry run checked. The position was left open.' : 'Dry run checked. No order was sent.';
+  if (dryRun) return close ? 'Practice close complete. No order was sent.' : 'Practice order complete. No order was sent.';
   const action = close ? 'close order' : 'order';
   switch (status.toLowerCase()) {
     case 'filled': return `MyFundedPerps filled the ${action}.`;
@@ -30,7 +32,18 @@ export function orderResultMessage({dryRun,status}: {dryRun:boolean; status:stri
   }
 }
 
-export class TradeWriteValidationError extends Error {}
+export function protectionResultMessage({dryRun,status}: {dryRun:boolean; status:string}) {
+  if (dryRun) return 'Practice edit complete. No orders were sent.';
+  switch (status.toLowerCase()) {
+    case 'updated': return 'Your exit orders were updated.';
+    case 'rejected':
+    case 'failed':
+    case 'denied': return 'MyFundedPerps could not update your exit orders. Check your position there.';
+    default: return 'Check MyFundedPerps for the latest on your exit orders.';
+  }
+}
+
+export class TradeWriteValidationError extends ScreenError {}
 export class TradeWriteUncertainError extends Error {
   constructor() { super(uncertainWriteMessage); }
 }
@@ -39,7 +52,7 @@ export function tradeWriteResult(ok: boolean, status: number, body: unknown) {
   const result = body as { uncertain?: unknown; error?: unknown; dryRun?: unknown; status?: unknown; warnings?: unknown } | null;
   // Older servers could send a validation status for an order that may have gone through.
   if (!ok && (status === 400 || status === 422) && result?.uncertain === false && typeof result.error === 'string' && result.error.trim()) {
-    throw new TradeWriteValidationError(result.error);
+    throw new TradeWriteValidationError(serverErrorMessage(result.error, 'The request was rejected. Review the details before trying again.'));
   }
   if (!ok || !result || result.uncertain === true || result.error !== undefined ||
       typeof result.dryRun !== 'boolean' || typeof result.status !== 'string' || !result.status.trim() ||
