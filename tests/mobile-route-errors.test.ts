@@ -191,14 +191,30 @@ describe('mobile route errors', () => {
     expect(await response.json()).toEqual({error:message,uncertain:false});
   });
 
-  it('returns equity-based profit progress on the dashboard', async () => {
+  it.each([
+    [500, 500, 75],
+    [0, 0, 100],
+    [undefined, 1_000, 50],
+    [null, undefined, undefined],
+  ])('returns dashboard profit progress for an equity-based remaining amount of %s', async (equityRemaining, remaining, achievedPercent) => {
     vi.mocked(MfpClient.prototype.getAccount).mockResolvedValue({
       id:'account', stage:'evaluation', status:'active', starting_balance:25_000,
-      risk:{remaining_profit:1_000,remaining_profit_equity:500,requirements:{profit_target_pct:8}},
+      risk:{remaining_profit:1_000,remaining_profit_equity:equityRemaining,requirements:{profit_target_pct:8}},
     });
     const response = await apiFetch(base + 'dashboard',{headers:{Authorization:'Bearer test-session'}});
     expect(response.status).toBe(200);
-    expect(await response.json()).toMatchObject({rules:{profit:{remaining:500,achievedPercent:75}}});
+    const {risk,rules} = await response.json();
+    expect(risk.remaining_profit_equity).toBe(equityRemaining);
+    expect(rules.profit.remaining).toBe(remaining);
+    expect(rules.profit.achievedPercent).toBe(achievedPercent);
+  });
+
+  it('blocks a trade when a pause may apply and the market category is missing', async () => {
+    vi.mocked(MfpClient.prototype.getTradingPolicy).mockResolvedValue({trading_halt:{categories:['crypto']}});
+    const response = await post('trade/quote',trade);
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({error:"Trade blocked. MyFundedPerps has paused trading in some markets. We don't have enough information to tell if this market is affected.",uncertain:false});
+    expect(MfpClient.prototype.getQuote).not.toHaveBeenCalled();
   });
 
   it('lists only markets that accept new orders', async () => {

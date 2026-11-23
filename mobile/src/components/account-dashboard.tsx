@@ -5,7 +5,7 @@ import { ActivityIndicator, AppState, Pressable, StyleSheet, Text, View } from '
 import { DailyLossReset } from './daily-loss-reset';
 
 type LossRule = { limitPct?: number; limitAmount?: number; floor?: number; room?: number; usedAmount?: number; usedPercent?: number; lockedFloor?: boolean };
-type Data = { account: { name?: string; stage?: string; balance?: number }; risk: {equity?: number; unrealized_pnl?: number; available_balance?: number; marks_complete?: boolean}; rules: {profit:{targetAmount?: number;remaining?: number;achievedAmount?: number;achievedPercent?: number};dailyLoss:LossRule;maxDrawdown:LossRule}; updatedAt: string; refreshSeconds: number };
+type Data = { account: { name?: string; stage?: string; balance?: number }; risk: {equity?: number; unrealized_pnl?: number; available_balance?: number; marks_complete?: boolean; remaining_profit_equity?: number | null}; rules: {profit:{targetAmount?: number;remaining?: number;achievedAmount?: number;achievedPercent?: number};dailyLoss:LossRule;maxDrawdown:LossRule}; updatedAt: string; refreshSeconds: number };
 type Props = {token:string;accountId:string;request:(path:string,method?:string,data?:unknown,token?:string)=>Promise<any>};
 const money=(value?:number)=>typeof value==='number'&&Number.isFinite(value)?new Intl.NumberFormat('en-US',{style:'currency',currency:'USD'}).format(value):'Unavailable';
 function Progress({percent,color='#2dcc98'}:{percent?:number;color?:string}) {
@@ -18,7 +18,7 @@ function LossCard({title,rule,daily}:{title:string;rule:LossRule;daily?:boolean}
     <Progress percent={rule.usedPercent} color="#ecae68" />
     <Text style={styles.small}>Equity floor: {money(rule.floor)}</Text>
     {rule.limitAmount!==undefined&&<Text style={styles.small}>Used {money(rule.usedAmount)} of {money(rule.limitAmount)}{rule.limitPct!==undefined?` (${rule.limitPct}%)`:''}</Text>}
-    {daily&&<DailyLossReset style={styles.small} />}
+    {daily&&(rule.limitAmount??0)>0&&<DailyLossReset style={styles.small} />}
     {rule.lockedFloor&&<Text style={styles.small}>Funded drawdown floor is locked at or above the starting balance.</Text>}
   </View>;
 }
@@ -54,7 +54,17 @@ export default function AccountDashboard({token,accountId,request}:Props) {
         <Text style={styles.small}>Available balance: {money(data.risk.available_balance)}</Text>
       </View>
       {data.risk.marks_complete===false&&<Text style={styles.error}>Some market prices are not fresh. Equity and P&L may be unavailable.</Text>}
-      {data.account.stage?.toLowerCase()!=='funded'&&<View style={styles.card}><Text style={styles.label}>Profit target</Text><Text style={styles.value}>{money(data.rules.profit.remaining)}</Text><Text style={styles.small}>Remaining to pass, including gains and losses on open positions</Text><Progress percent={data.rules.profit.achievedPercent} /><Text style={styles.small}>Achieved {money(data.rules.profit.achievedAmount)} of {money(data.rules.profit.targetAmount)}</Text></View>}
+      {data.account.stage?.toLowerCase()!=='funded'&&<View style={styles.card}>
+        <Text style={styles.label}>Profit target</Text>
+        <Text style={styles.value}>{money(data.rules.profit.remaining)}</Text>
+        <Text style={styles.small}>Remaining to pass{data.rules.profit.remaining!==undefined&&(
+          data.risk.remaining_profit_equity===undefined
+            ? ', based on closed trades'
+            : ', including gains and losses on open positions'
+        )}</Text>
+        <Progress percent={data.rules.profit.achievedPercent} />
+        <Text style={styles.small}>Achieved {money(data.rules.profit.achievedAmount)} of {money(data.rules.profit.targetAmount)}</Text>
+      </View>}
       <LossCard title="Daily loss limit" rule={data.rules.dailyLoss} daily /><LossCard title="Maximum drawdown" rule={data.rules.maxDrawdown} />
       <Text style={styles.small}>Updated {new Date(data.updatedAt).toLocaleTimeString()}. Refreshes automatically while the app is open.</Text>
     </>}

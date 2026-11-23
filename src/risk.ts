@@ -148,7 +148,7 @@ export function tradingPolicyProblems(policy: TradingPolicy, market?: Market): s
     const halted = policy.trading_halt?.categories;
     if (halted?.length) {
       const category = market.category?.trim();
-      if (!category) problems.push("We could not check whether trading is paused for this market.");
+      if (!category) problems.push("MyFundedPerps has paused trading in some markets. We don't have enough information to tell if this market is affected.");
       else if (halted.some(entry => normalize(entry) === normalize(category))) {
         problems.push("MyFundedPerps has paused opening and increasing positions in this market.");
       }

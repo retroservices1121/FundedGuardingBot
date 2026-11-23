@@ -1,4 +1,4 @@
-import {router} from 'expo-router';
+import {Link,router} from 'expo-router';
 import {SafeAreaView} from 'react-native-safe-area-context';
 import {createDemoClient,DEMO_TOKEN,DEMO_USER} from './src/lib/demo-session';
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
@@ -14,7 +14,7 @@ import { isTradeWrite, type ConfirmRetry } from './src/lib/trade-write';
 import { ScreenError, screenErrorMessage } from './src/lib/screen-error';
 import { createMobileRequest, serverUnavailableMessage, SessionError } from './src/lib/mobile-request';
 import { useTradeWriteLock } from './src/hooks/use-trade-write-lock';
-import { TRADING_DISCLAIMER } from './src/lib/app-information';
+import { APP_PAGE_URLS, TRADING_DISCLAIMER } from './src/lib/app-information';
 
 type User = { id: string; provider: string; email?: string };
 const key = 'guardian.native.session';
@@ -162,7 +162,14 @@ export default function App({ children }: { children: ReactNode }) {
     {busy && <ActivityIndicator color="#2dcc98" />}
     {!!error && <Text accessibilityRole="alert" style={styles.delete}>{error}</Text>}
     <Text style={styles.footnote}>Sign in to Guardian, then connect your MyFundedPerps account.</Text>
-    <Text style={styles.footnote}>{TRADING_DISCLAIMER}</Text>
+    <View>
+      <Text style={styles.footnote}>{TRADING_DISCLAIMER}</Text>
+      <View style={styles.legalLinks}>
+        <Link href={APP_PAGE_URLS.privacy} style={styles.legalLink}>Privacy Policy</Link>
+        <Link href={APP_PAGE_URLS.terms} style={styles.legalLink}>Terms of Use</Link>
+        <Link href={APP_PAGE_URLS.support} style={styles.legalLink}>Support</Link>
+      </View>
+    </View>
     </ScrollView>
     </KeyboardAvoidingView>
   </View>;
@@ -184,4 +191,6 @@ const styles = StyleSheet.create({
   googleLabel: { color: '#1f1f1f', fontSize: 19, fontWeight: '500', flexShrink: 1 },
   link: { color: '#2dcc98', fontSize: 17, paddingVertical: 10 }, delete: { color: '#ff9c9c', fontSize: 15, paddingVertical: 8 },
   footnote: { color: '#82968b', fontSize: 13, lineHeight: 20 },
+  legalLinks: { flexDirection: 'row', flexWrap: 'wrap', columnGap: 16 },
+  legalLink: { color: '#2dcc98', fontSize: 13, paddingVertical: 14 },
 });

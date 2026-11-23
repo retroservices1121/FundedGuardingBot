@@ -37,7 +37,7 @@ export function createDemoClient(){
   if(route==='me'&&method==='GET')return {user:DEMO_USER};
   if(route==='connection'&&method==='GET')return {connected:true,accounts:[{...account}],selectedAccountId:account.id,keyLastFour:'DEMO'};
   if(route==='account-selection'&&method==='POST'){if(data.accountId!==account.id)throw new ScreenError('Choose the sample account.');return {ok:true};}
-  if(route==='dashboard'&&method==='GET')return {account:{...account},risk:{equity:25395,unrealized_pnl:75,available_balance:24530,marks_complete:true},rules:{profit:{targetAmount:2000,remaining:1605,achievedAmount:395,achievedPercent:19.75},dailyLoss:{limitPct:5,limitAmount:1250,floor:24070,room:1325,usedAmount:0,usedPercent:0},maxDrawdown:{limitPct:10,limitAmount:2500,floor:22500,room:2895,usedAmount:0,usedPercent:0}},updatedAt:new Date().toISOString(),refreshSeconds:20};
+  if(route==='dashboard'&&method==='GET')return {account:{...account},risk:{equity:25395,unrealized_pnl:75,available_balance:24530,marks_complete:true,remaining_profit_equity:1605},rules:{profit:{targetAmount:2000,remaining:1605,achievedAmount:395,achievedPercent:19.75},dailyLoss:{limitPct:5,limitAmount:1250,floor:24070,room:1325,usedAmount:0,usedPercent:0},maxDrawdown:{limitPct:10,limitAmount:2500,floor:22500,room:2895,usedAmount:0,usedPercent:0}},updatedAt:new Date().toISOString(),refreshSeconds:20};
   if(route==='markets'&&method==='GET')return {markets:demoMarkets.map(m=>({...m}))};
   if(route==='activity'&&method==='GET')return {accountId:account.id,open:open.map(p=>({...p})),closed:closed.map(p=>({...p})),updatedAt:new Date().toISOString(),refreshSeconds:20};
   if(route==='guards'&&method==='GET')return copy(guards);
