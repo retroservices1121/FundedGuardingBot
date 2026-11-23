@@ -7,7 +7,7 @@ const config=loadConfig({TELEGRAM_BOT_TOKEN:'test',DATABASE_URL:'postgres://loca
 afterEach(()=>vi.restoreAllMocks());
 function setup(){
  const position={id:'p',account_id:'a',market_id:'binance|EUR',side:'long',size:346494.3,symbol:'EUR'};
- const auth={connection:vi.fn().mockResolvedValue({environment:'live',selected_account_id:'a',encrypted_api_key:new SecretBox(config.ENCRYPTION_KEY).encrypt('fp_live_test')}),saveClose:vi.fn(),claimClose:vi.fn()};
+ const auth={connection:vi.fn().mockResolvedValue({environment:'live',selected_account_id:'a',encrypted_api_key:new SecretBox(config.ENCRYPTION_KEY).encrypt('fp_live_test')}),saveClose:vi.fn(),claimClose:vi.fn(),closeTicketSubmitted:vi.fn().mockResolvedValue(false)};
  vi.spyOn(MfpClient.prototype,'listOpenPositions').mockResolvedValue([position as never]);
  vi.spyOn(MfpClient.prototype,'listMarkets').mockResolvedValue([{id:'binance|EUR',size_precision:1}]);
  vi.spyOn(MfpClient.prototype,'getQuote').mockResolvedValue({mid:1.16,bid:1.15,ask:1.16,estimated_fee:10});
@@ -33,6 +33,6 @@ describe('native position closing',()=>{
  });
  it('refuses already claimed or expired close tickets',async()=>{
   const {activity,auth,close}=setup();auth.claimClose.mockResolvedValue(undefined);
-  await expect(activity.confirmClose('session','ticket')).rejects.toThrow('expired or was already submitted');expect(close).not.toHaveBeenCalled();
+  await expect(activity.confirmClose('session','ticket')).rejects.toThrow('Close quote expired');expect(close).not.toHaveBeenCalled();
  });
 });

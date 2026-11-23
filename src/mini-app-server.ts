@@ -6,6 +6,7 @@ import { parseGuards } from "./mobile-guards.js";
 import { MobileActivity } from "./mobile-activity.js";
 import { MobileTrading } from "./mobile-trading.js";
 import { MobileAuth } from "./mobile-auth.js";
+import { MobileSessionError, MobileValidationError, MobileWriteUncertainError } from "./mobile-errors.js";
 import { randomUUID } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { readFile } from "node:fs/promises";
@@ -13,9 +14,9 @@ import path from "node:path";
 import type { Config } from "./config.js";
 import { SecretBox } from "./crypto.js";
 import { Database } from "./db.js";
-import { isActiveAccount, isPassedAccount, MfpClient, MfpError } from "./mfp.js";
+import { isActiveAccount, isPassedAccount, MfpClient, MfpError, MfpTransportError } from "./mfp.js";
 import { accountDailyPnl, automaticLockReason } from "./guardian.js";
-import { accountRisk, accountRuleProgress, buildTicket, calculateSize, guardAccount, platformRuleCheck, resolveAccountRequirements, riskAllowance } from "./risk.js";
+import { accountRisk, accountRuleProgress, buildTicket, calculateSize, guardAccount, platformRuleCheck, resolveAccountRequirements, riskAllowance, RiskSizingError } from "./risk.js";
 import { createClosedPositionShareCard } from "./share-card.js";
 import { createPassedAccountCard } from "./passed-card.js";
 import { validateTelegramInitData, type TelegramMiniAppUser } from "./telegram-auth.js";
@@ -46,11 +47,59 @@ async function body(request: IncomingMessage) {
   for await (const chunk of request) {
     const buffer = Buffer.from(chunk);
     size += buffer.length;
-    if (size > 32_768) throw new Error("Request is too large.");
+    if (size > 32_768) throw new MobileValidationError("Request is too large.");
     chunks.push(buffer);
   }
   if (!chunks.length) return {} as Record<string, unknown>;
   return JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>;
+}
+
+async function mobileBody(request: IncomingMessage) {
+  try {
+    const input = await body(request);
+    if (!input || typeof input !== "object" || Array.isArray(input)) throw new MobileValidationError("Enter valid request details.");
+    return input;
+  } catch (error) {
+    if (error instanceof SyntaxError) throw new MobileValidationError("Enter valid request details.");
+    throw error;
+  }
+}
+
+function mobileTicketId(input: Record<string, unknown>, message: string) {
+  if (typeof input.ticketId !== "string" || !input.ticketId.trim()) {
+    throw new MobileValidationError(message);
+  }
+  return input.ticketId;
+}
+
+async function mobileOperation(response: ServerResponse, write: boolean, run: () => Promise<unknown>) {
+  try {
+    return json(response, 200, await run());
+  } catch (error) {
+    if (error instanceof MobileSessionError) throw error;
+    if (error instanceof MobileValidationError || error instanceof RiskSizingError) {
+      return json(response, 400, { error: error.message, uncertain: false });
+    }
+    if (error instanceof MfpError && [400, 401, 403, 404, 422].includes(error.status)) {
+      return json(response, 400, {
+        error: [401, 403].includes(error.status)
+          ? "MyFundedPerps denied access. Check your account connection."
+          : "MyFundedPerps rejected the request. Check your account and the request details.",
+        uncertain: false,
+      });
+    }
+    let status = 500;
+    if (error instanceof MfpTransportError) status = error.timedOut ? 504 : 502;
+    if (error instanceof MfpError) {
+      status = error.status === 408 || error.status === 504 ? 504 : [429, 503].includes(error.status) ? 503 : 502;
+    }
+    if (error instanceof MobileWriteUncertainError) status = 503;
+    if (write) return json(response, status, {
+      error: "The result is unknown. Check MyFundedPerps before trying again.",
+      uncertain: true,
+    });
+    return json(response, status, { error: "Could not complete the request. Please try again." });
+  }
 }
 
 function marketSymbol(market: Market) {
@@ -561,18 +610,22 @@ export function startMiniAppServer(config: Config, db: Database) {
         return void response.end(content);
       }
       if (url.pathname.startsWith("/api/mobile/auth/")) {
-        await mobileAuthReady;
+        try { await mobileAuthReady; }
+        catch { return json(response, 503, { error: "Could not reach Guardian. Please try again." }); }
         let address = request.socket.remoteAddress ?? "unknown";
         if (request.headers.authorization?.startsWith("Bearer ")) {
           try { address = `mobile:${(await mobileAuth.user(request.headers.authorization.slice(7))).id}`; }
-          catch { return json(response,401,{error:"Session expired. Please sign in again."}); }
+          catch (error) {
+            if (error instanceof MobileSessionError) return json(response, 401, { error: error.message });
+            return json(response, 503, { error: "Could not reach Guardian. Please try again." });
+          }
         }
         const limit = mobileRequestLimiter.check(address, url.pathname, request.method ?? "GET");
         if (!limit.allowed) {
           response.setHeader("Retry-After", String(limit.retryAfter));
           return json(response, 429, { error: limit.error });
         }
-        const token = request.headers.authorization?.replace(/^Bearer /, "") ?? "";
+        const token = request.headers.authorization?.startsWith("Bearer ") ? request.headers.authorization.slice(7) : "";
         try {
           if (url.pathname === "/api/mobile/auth/analytics" && request.method === "POST") {
             const user=await mobileAuth.user(token);
@@ -583,14 +636,15 @@ export function startMiniAppServer(config: Config, db: Database) {
           if (url.pathname === "/api/mobile/auth/login" && request.method === "POST") {
             const input = await body(request);
             if ((input.provider !== "apple" && input.provider !== "google") || typeof input.idToken !== "string" || input.idToken.length > 16000) return json(response, 400, { error: "Invalid sign-in request." });
-            return json(response, 200, await mobileAuth.login(input.provider, input.idToken, typeof input.nonce === "string" ? input.nonce : undefined));
+            try { return json(response, 200, await mobileAuth.login(input.provider, input.idToken, typeof input.nonce === "string" ? input.nonce : undefined)); }
+            catch { return json(response, 400, { error: "Could not verify sign-in. Please try again." }); }
           }
           if (url.pathname === "/api/mobile/auth/email-login" && request.method === "POST") {
             const input = await body(request);
             if (typeof input.email !== 'string' || input.email.length > 254 || typeof input.password !== 'string' || !input.password || input.password.length > 256) return json(response,400,{error:'Enter your email and password.'});
-            try { return json(response,200,await mobileAuth.loginEmail(input.email,input.password)); }
-            catch (error) { return json(response,401,{error:error instanceof Error ? error.message : 'Could not sign in.'}); }
+            return json(response,200,await mobileAuth.loginEmail(input.email,input.password));
           }
+          if (!token) throw new MobileSessionError("Session expired. Please sign in again.");
           if (url.pathname === "/api/mobile/auth/connect" && request.method === "POST") {
             await mobileAuth.user(token);
             const input = await body(request);
@@ -622,18 +676,26 @@ export function startMiniAppServer(config: Config, db: Database) {
             await mobileAuth.user(token);
             return json(response,200,{items:await db.pulseItems(),updatedAt:new Date().toISOString()});
           }
-          if(url.pathname==='/api/mobile/auth/protection'&&request.method==='POST'){
-            const input=await body(request);if(typeof input.positionId!=='string')throw new Error('Choose an open position.');
-            return json(response,200,await mobileActivity.protection(token,input.positionId));
+          if (url.pathname === "/api/mobile/auth/protection" && request.method === "POST") {
+            return await mobileOperation(response, false, async () => {
+              const input = await mobileBody(request);
+              if (typeof input.positionId !== "string") throw new MobileValidationError("Choose an open position.");
+              return mobileActivity.protection(token, input.positionId);
+            });
           }
-          if(url.pathname==='/api/mobile/auth/share'&&request.method==='POST'){
-            const input=await body(request);if(typeof input.positionId!=='string')throw new Error('Choose a closed position.');
-            return json(response,200,await mobileActivity.share(token,input.positionId));
+          if (url.pathname === "/api/mobile/auth/share" && request.method === "POST") {
+            return await mobileOperation(response, false, async () => {
+              const input = await mobileBody(request);
+              if (typeof input.positionId !== "string") throw new MobileValidationError("Choose a closed position.");
+              return mobileActivity.share(token, input.positionId);
+            });
           }
-          if(url.pathname==='/api/mobile/auth/protection/quote'&&request.method==='POST')return json(response,200,await mobileActivity.quoteProtection(token,await body(request)));
-          if(url.pathname==='/api/mobile/auth/protection/confirm'&&request.method==='POST'){
-            const input=await body(request);if(typeof input.ticketId!=='string')throw new Error('Review an edit first.');
-            return json(response,200,await mobileActivity.confirmProtection(token,input.ticketId));
+          if (url.pathname === "/api/mobile/auth/protection/quote" && request.method === "POST") {
+            return await mobileOperation(response, false, async () => mobileActivity.quoteProtection(token, await mobileBody(request)));
+          }
+          if (url.pathname === "/api/mobile/auth/protection/confirm" && request.method === "POST") {
+            return await mobileOperation(response, true, async () =>
+              mobileActivity.confirmProtection(token, mobileTicketId(await mobileBody(request), "Review an edit first.")));
           }
           if (url.pathname === "/api/mobile/auth/activity" && request.method === "GET") {
             await mobileAuth.user(token);
@@ -646,22 +708,18 @@ export function startMiniAppServer(config: Config, db: Database) {
             catch(error) { return json(response,400,{error:errorMessage(error)}); }
           }
           if (url.pathname === "/api/mobile/auth/close/confirm" && request.method === "POST") {
-            await mobileAuth.user(token);
-            const input=await body(request);
-            try { return json(response,200,await mobileActivity.confirmClose(token,String(input.ticketId??""))); }
-            catch(error) { return json(response,400,{error:errorMessage(error)}); }
+            return await mobileOperation(response, true, async () =>
+              mobileActivity.confirmClose(token, mobileTicketId(await mobileBody(request), "Review a close first.")));
           }
-          if(url.pathname==='/api/mobile/auth/trade/quick'&&request.method==='POST')return json(response,200,await mobileTrading.quick(token,await body(request)));
+          if (url.pathname === "/api/mobile/auth/trade/quick" && request.method === "POST") {
+            return await mobileOperation(response, true, async () => mobileTrading.quick(token, await mobileBody(request)));
+          }
           if (url.pathname === "/api/mobile/auth/trade/quote" && request.method === "POST") {
-            await mobileAuth.user(token);
-            try { return json(response,200,await mobileTrading.quote(token,await body(request))); }
-            catch(error) { return json(response,400,{error:errorMessage(error)}); }
+            return await mobileOperation(response, false, async () => mobileTrading.quote(token, await mobileBody(request)));
           }
           if (url.pathname === "/api/mobile/auth/trade/confirm" && request.method === "POST") {
-            await mobileAuth.user(token);
-            const input = await body(request);
-            try { return json(response,200,await mobileTrading.confirm(token,String(input.ticketId??""))); }
-            catch(error) { return json(response,400,{error:errorMessage(error)}); }
+            return await mobileOperation(response, true, async () =>
+              mobileTrading.confirm(token, mobileTicketId(await mobileBody(request), "Review a trade first.")));
           }
           if (url.pathname === "/api/mobile/auth/markets" && request.method === "GET") {
             await mobileAuth.user(token);
@@ -706,7 +764,11 @@ export function startMiniAppServer(config: Config, db: Database) {
           if (url.pathname === "/api/mobile/auth/logout" && request.method === "POST") { await mobilePush.disable((await mobileAuth.user(token)).id); await mobileAuth.logout(token); return json(response, 200, { ok: true }); }
           if (url.pathname === "/api/mobile/auth/account" && request.method === "DELETE") { await mobileAuth.delete(token); return json(response, 200, { ok: true }); }
           return json(response, 404, { error: "Not found." });
-        } catch { return json(response, 401, { error: "Could not verify your session. Please sign in again." }); }
+        } catch (error) {
+          if (error instanceof MobileSessionError) return json(response, 401, { error: error.message });
+          if (error instanceof MobileValidationError) return json(response, 400, { error: error.message });
+          return json(response, 503, { error: "Could not complete the request. Please try again." });
+        }
       }
       if (url.pathname === "/health") return json(response, 200, { ok: true });
       if (url.pathname.startsWith("/api/landing/")) return void await landingApi(request, response, url.pathname);

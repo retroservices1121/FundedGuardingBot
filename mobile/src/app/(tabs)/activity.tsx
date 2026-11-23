@@ -1,3 +1,5 @@
+import { TradeWriteUncertainError } from '../../lib/trade-write';
+import { TradeWriteNotice } from '../../components/trade-write-notice';
 import { router } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, AppState, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
@@ -9,7 +11,7 @@ type Data={accountId:string;open:Position[];closed:Position[];updatedAt:string;r
 type Quote={id:string;symbol:string;percent:number;size?:number;originalSize:number;expectedPrice:number;estimatedFee?:number;expiresAt:number};
 const money=(v?:number)=>typeof v==='number'&&Number.isFinite(v)?new Intl.NumberFormat('en-US',{style:'currency',currency:'USD',maximumFractionDigits:2}).format(v):'Unavailable';
 export default function Activity(){
- const {token,request,demo}=useSession(),focused=useIsFocused();
+ const {token,request,demo,writeState}=useSession(),focused=useIsFocused();
  const [data,setData]=useState<Data|null>(null),[tab,setTab]=useState<'open'|'closed'>('open'),[error,setError]=useState(''),[busy,setBusy]=useState(false),[action,setAction]=useState(false),[notice,setNotice]=useState(''),[feed,setFeed]=useState<Record<string,number>>({}),[live,setLive]=useState(false);
  const refresh=useRef<(()=>Promise<void>)|null>(null),pending=useRef(false);
  useEffect(()=>{
@@ -35,7 +37,7 @@ export default function Activity(){
   return()=>{stopped=true;listener.remove();if(retry)clearTimeout(retry);if(flush)clearTimeout(flush);socket?.close();};
  },[focused,tab,subscriptions,demo]);
  async function prepareClose(position:Position,percent:number){
-  if(pending.current)return;pending.current=true;setAction(true);setError('');setNotice('');
+  if(pending.current||writeState!=='ready')return;pending.current=true;setAction(true);setError('');setNotice('');
   try{const result=await request('close/quote','POST',{positionId:position.id,percent},token),ticket:Quote=result.ticket;
    Alert.alert(`${result.dryRun?'Dry run: ':''}Close ${percent}% of ${ticket.symbol}?`,`Size: ${ticket.size??ticket.originalSize}\nEstimated price: ${money(ticket.expectedPrice)}\nEstimated close fee: ${money(ticket.estimatedFee)}\n\n${result.dryRun?'No order will be sent.':'This sends a reduce-only market close. MFP may resize or cancel working TP/SL orders.'}`,[{text:'Keep position',style:'cancel'},{text:result.dryRun?'Validate':'Confirm close',style:'destructive',onPress:()=>void confirmClose(ticket)}]);
   }catch(e){setError(e instanceof Error?e.message:'Could not quote close.');}
@@ -44,16 +46,16 @@ export default function Activity(){
  async function confirmClose(ticket:Quote){
   // The clock check runs only when the user confirms the close.
   // eslint-disable-next-line react-hooks/purity
-  if(pending.current)return;if(Date.now()>=ticket.expiresAt){setError('Close quote expired. Review a new close quote.');return;}
+  if(pending.current||writeState!=='ready')return;if(Date.now()>=ticket.expiresAt){setError('Close quote expired. Review a new close quote.');return;}
   pending.current=true;setAction(true);setError('');
   try{const result=await request('close/confirm','POST',{ticketId:ticket.id},token);setNotice(result.dryRun?'Dry run validated. Position remains open.':`Close submitted. Status: ${result.status}. Awaiting MFP confirmation.`);await refresh.current?.();}
-  catch(e){setError(`${e instanceof Error?e.message:'Could not confirm close.'} Check MyFundedPerps before attempting another close.`);}
+  catch(e){if(!(e instanceof TradeWriteUncertainError))setError(e instanceof Error?e.message:'Could not confirm close.');}
   finally{pending.current=false;setAction(false);}
  }
  const positions=data?.[tab]??[];
  return <SafeAreaView style={styles.page} edges={['top']}><ScrollView showsVerticalScrollIndicator={false} showsHorizontalScrollIndicator={false} contentContainerStyle={styles.content} refreshControl={<RefreshControl refreshing={busy} onRefresh={()=>void refresh.current?.()} tintColor="#2dcc98"/>}>
-  <Text style={styles.heading}>Activity</Text><View style={styles.row}>{(['open','closed'] as const).map(value=><Pressable accessibilityRole="button" accessibilityState={{selected:tab===value}} key={value} onPress={()=>setTab(value)} style={[styles.toggle,tab===value&&styles.selected]}><Text style={styles.value}>{value==='open'?'Open positions':'Closed positions'}</Text></Pressable>)}</View>
-  {!!notice&&<Text accessibilityRole="alert" style={styles.green}>{notice}</Text>}{!!error&&<Text accessibilityRole="alert" style={styles.error}>{error}{data?' Showing last received data.':''}</Text>}
+  <Text style={styles.heading}>Activity</Text><TradeWriteNotice/><View style={styles.row}>{(['open','closed'] as const).map(value=><Pressable accessibilityRole="button" accessibilityState={{selected:tab===value}} key={value} onPress={()=>setTab(value)} style={[styles.toggle,tab===value&&styles.selected]}><Text style={styles.value}>{value==='open'?'Open positions':'Closed positions'}</Text></Pressable>)}</View>
+  {!!notice&&<Text accessibilityRole="alert" style={styles.green}>{notice}</Text>}{!!error&&writeState!=='uncertain'&&<Text accessibilityRole="alert" style={styles.error}>{error}{data?' Showing last received data.':''}</Text>}
   {!data&&busy&&<ActivityIndicator color="#2dcc98"/>}
   {data&&!positions.length&&<Text style={styles.copy}>{tab==='open'?'No open positions on this account.':'No closed positions returned for this account.'}</Text>}
   {positions.map(p=>{const mark=feed[`${p.provider?.toLowerCase()}|${p.coin?.toUpperCase()}`]??p.markPrice,pnl=tab==='closed'?p.realized_pnl:mark!==undefined?(mark-p.entry_price)*Math.abs(p.size)*(p.side==='long'?1:-1):p.estimatedUnrealizedPnl;return <View key={p.id} style={styles.card}>
@@ -64,7 +66,7 @@ export default function Activity(){
    <View style={styles.row}><Text style={styles.copy}>{tab==='open'?'Estimated close fee':'Reported fees'}</Text><Text style={styles.value}>{money(tab==='open'?p.estimatedCloseFee:p.fees)}</Text></View>
    <Text style={styles.small}>Size {p.size}</Text>
    <Pressable accessibilityRole="button" disabled={action} onPress={()=>router.push({pathname:tab==='open'?'/protection':'/share-card',params:{positionId:p.id}})}><Text style={styles.green}>{tab==='open'?'Edit TP/SL':'Create share card'}</Text></Pressable>
-   {tab==='open'?<View style={styles.row}>{[25,50,100].map(percent=><Pressable key={percent} accessibilityRole="button" disabled={action||busy} style={styles.close} onPress={()=>void prepareClose(p,percent)}><Text style={styles.value}>{percent===100?'Close all':`Close ${percent}%`}</Text></Pressable>)}</View>:p.closed_at!=null&&<Text style={styles.small}>{new Date(p.closed_at<1e10?p.closed_at*1000:p.closed_at).toLocaleString()}</Text>}
+   {tab==='open'?<View style={styles.row}>{[25,50,100].map(percent=><Pressable key={percent} accessibilityRole="button" disabled={action||busy||writeState!=='ready'} style={styles.close} onPress={()=>void prepareClose(p,percent)}><Text style={styles.value}>{percent===100?'Close all':`Close ${percent}%`}</Text></Pressable>)}</View>:p.closed_at!=null&&<Text style={styles.small}>{new Date(p.closed_at<1e10?p.closed_at*1000:p.closed_at).toLocaleString()}</Text>}
   </View>})}
   {data&&<Text style={styles.small}>{tab==='closed'?'Latest 50 closed positions. ':''}Account data updated {new Date(data.updatedAt).toLocaleTimeString()}.</Text>}
   {action&&<ActivityIndicator color="#2dcc98"/>}<Pressable accessibilityRole="button" disabled={busy} onPress={()=>void refresh.current?.()}><Text style={styles.green}>Refresh positions</Text></Pressable>

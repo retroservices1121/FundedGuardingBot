@@ -236,6 +236,8 @@ export function platformRuleCheck(input: {
   };
 }
 
+export class RiskSizingError extends Error {}
+
 export function calculateSize(
   riskUsd: number,
   entryPrice: number,
@@ -243,7 +245,7 @@ export function calculateSize(
   precision: number,
 ): number {
   const stopDistance = entryPrice * (stopPercent / 100);
-  if (stopDistance <= 0) throw new Error("Stop distance must be positive.");
+  if (stopDistance <= 0) throw new RiskSizingError("Stop distance must be positive.");
   const rawSize = riskUsd / stopDistance;
   const factor = 10 ** precision;
   return Math.floor(rawSize * factor) / factor;
@@ -266,7 +268,7 @@ export function buildTicket(input: {
   const entry = input.quote.estimated_fill_price ?? input.quote.mid;
   const precision = input.market.size_precision ?? input.market.quantity_precision ?? 6;
   const size = calculateSize(input.riskUsd, entry, input.stopPercent, precision);
-  if (size <= 0) throw new Error("Calculated size is below the market minimum precision.");
+  if (size <= 0) throw new RiskSizingError("Calculated size is below the market minimum precision.");
   const stopDistance = entry * (input.stopPercent / 100);
   const direction = input.side === "buy" ? 1 : -1;
   return {

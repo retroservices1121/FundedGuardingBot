@@ -79,6 +79,12 @@ export class MfpError extends Error {
   }
 }
 
+export class MfpTransportError extends Error {
+  constructor(readonly timedOut: boolean) {
+    super(timedOut ? "MyFundedPerps took too long to respond." : "Could not reach MyFundedPerps.");
+  }
+}
+
 export class MfpClient {
   constructor(
     private readonly baseUrl: string,
@@ -86,6 +92,7 @@ export class MfpClient {
   ) {}
 
   private async request<T>(path: string, init: RequestInit = {}): Promise<T> {
+    const signal = AbortSignal.timeout(12_000);
     const response = await fetch(`${this.baseUrl}${path}`, {
       ...init,
       headers: {
@@ -94,9 +101,15 @@ export class MfpClient {
         ...(init.body ? { "Content-Type": "application/json" } : {}),
         ...init.headers,
       },
-      signal: AbortSignal.timeout(12_000),
+      signal,
+    }).catch(error => {
+      throw new MfpTransportError(signal.aborted || error?.name === "TimeoutError" || error?.name === "AbortError");
     });
-    const payload = (await response.json().catch(() => ({}))) as {
+    const payload = (await response.json().catch(error => {
+      if (signal.aborted) throw new MfpTransportError(true);
+      if (!(error instanceof SyntaxError)) throw new MfpTransportError(false);
+      return {};
+    })) as {
       data?: T;
       error?: { code?: string; message?: string; details?: unknown } | string;
     };

@@ -1,7 +1,8 @@
+import {MobileValidationError} from './mobile-errors.js';
 import type {Database} from './db.js';
 export function notificationInput(input:Record<string,unknown>){
- const pushToken=input.pushToken;if(typeof pushToken!=='string'||!/^Expo(nent)?PushToken\[[A-Za-z0-9_-]+\]$/.test(pushToken)||pushToken.length>200)throw new Error('Invalid notification device token.');
- for(const field of ['news','alerts','digest'])if(typeof input[field]!=='boolean')throw new Error('Choose your notification preferences.');
+ const pushToken=input.pushToken;if(typeof pushToken!=='string'||!/^Expo(nent)?PushToken\[[A-Za-z0-9_-]+\]$/.test(pushToken)||pushToken.length>200)throw new MobileValidationError('Invalid notification device token.');
+ for(const field of ['news','alerts','digest'])if(typeof input[field]!=='boolean')throw new MobileValidationError('Choose your notification preferences.');
  return {pushToken,news:input.news as boolean,alerts:input.alerts as boolean,digest:input.digest as boolean};
 }
 export class MobilePush{

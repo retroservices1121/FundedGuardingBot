@@ -2,6 +2,7 @@ import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { createRemoteJWKSet, jwtVerify, type JWTPayload } from 'jose';
 import type { TradeTicket } from './types.js';
 import type { Database } from './db.js';
+import { MobileSessionError, MobileValidationError } from './mobile-errors.js';
 import { reviewCredentials, verifyReviewPassword } from './review-login.js';
 
 export const GOOGLE_IOS_CLIENT_ID = '174585846381-7nrqvpr243ndbk91gst8mjrubhkmnbdk.apps.googleusercontent.com';
@@ -95,16 +96,16 @@ export class MobileAuth {
   async loginEmail(email: string, password: string) {
     const credentials = reviewCredentials();
     const failure = 'Email or password is incorrect, or email access is unavailable.';
-    if (!credentials) throw new Error(failure);
+    if (!credentials) throw new MobileSessionError(failure);
     // Persist a shared account throttle across processes and deploys.
     const attempt = await this.db.pool.query(`INSERT INTO mobile_email_login_attempts (identity_hash,attempts,expires_at)
       VALUES ($1,1,NOW()+INTERVAL '15 minutes') ON CONFLICT(identity_hash) DO UPDATE SET
       attempts=CASE WHEN mobile_email_login_attempts.expires_at<=NOW() THEN 1 ELSE mobile_email_login_attempts.attempts+1 END,
       expires_at=CASE WHEN mobile_email_login_attempts.expires_at<=NOW() THEN NOW()+INTERVAL '15 minutes' ELSE mobile_email_login_attempts.expires_at END
       RETURNING attempts`, [hash(credentials.email)]);
-    if (attempt.rows[0].attempts > 10) throw new Error('Too many email sign-in attempts. Try again in 15 minutes.');
+    if (attempt.rows[0].attempts > 10) throw new MobileValidationError('Too many email sign-in attempts. Try again in 15 minutes.');
     const valid = await verifyReviewPassword(password, credentials.passwordHash);
-    if (!valid || email.trim().toLowerCase() !== credentials.email) throw new Error(failure);
+    if (!valid || email.trim().toLowerCase() !== credentials.email) throw new MobileSessionError(failure);
     const client = await this.db.pool.connect();
     const sessionToken = randomBytes(32).toString('base64url');
     try {
@@ -126,7 +127,7 @@ export class MobileAuth {
     const result = await this.db.pool.query(`SELECT i.id,i.provider,i.email,i.subject FROM mobile_sessions s JOIN mobile_identities i ON i.id=s.identity_id WHERE s.token_hash=$1 AND s.expires_at>NOW()`, [hash(token)]);
     const user = result.rows[0];
     const credentials = user?.provider === 'email' ? reviewCredentials() : undefined;
-    if (!user || (user.provider === 'email' && (!credentials || user.email !== credentials.email || user.subject !== hash(JSON.stringify([credentials.email, credentials.passwordHash]))))) throw new Error('Session expired. Please sign in again.');
+    if (!user || (user.provider === 'email' && (!credentials || user.email !== credentials.email || user.subject !== hash(JSON.stringify([credentials.email, credentials.passwordHash]))))) throw new MobileSessionError('Session expired. Please sign in again.');
     return result.rows[0];
   }
   async connection(token: string) {
@@ -178,6 +179,11 @@ export class MobileAuth {
     const user = await this.user(token);
     const result = await this.db.pool.query(`UPDATE mobile_close_tickets SET submitted_at=NOW() WHERE id=$1 AND identity_id=$2 AND submitted_at IS NULL AND expires_at>NOW() RETURNING payload`,[id,user.id]);
     return result.rows[0]?.payload;
+  }
+  async closeTicketSubmitted(token: string, id: string) {
+    const user = await this.user(token);
+    const result = await this.db.pool.query(`SELECT submitted_at FROM mobile_close_tickets WHERE id=$1 AND identity_id=$2`, [id,user.id]);
+    return Boolean(result.rows[0]?.submitted_at);
   }
   async logout(token: string) { await this.db.pool.query(`DELETE FROM mobile_sessions WHERE token_hash=$1`, [hash(token)]); }
   async delete(token: string) {
