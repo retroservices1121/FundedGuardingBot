@@ -117,14 +117,14 @@ function marketProvider(market: Market) {
 export function startMiniAppServer(config: Config, db: Database) {
   const mobileAnalytics = new MobileAnalytics(db);
   const landingApi = createLandingApi(db);
-  const mobileAuth = new MobileAuth(db);
+  const secrets = new SecretBox(config.ENCRYPTION_KEY);
+  const mobileAuth = new MobileAuth(db, secrets);
   const mobileActivity = new MobileActivity(mobileAuth, config);
   const mobileTrading = new MobileTrading(mobileAuth, config);
   const mobilePush=new MobilePush(db);
   const mobileAuthReady = mobileAuth.migrate().then(async()=>{await mobilePush.migrate();mobilePush.start();});
   mobileAuthReady.catch(() => console.error("Mobile authentication database setup failed."));
   const mobileRequestLimiter = new MobileRequestLimiter();
-  const secrets = new SecretBox(config.ENCRYPTION_KEY);
   const publicRoot = path.join(process.cwd(), "public", "miniapp");
 
   async function authenticatedUser(request: IncomingMessage) {

@@ -58,12 +58,13 @@ export default function App({ children }: { children: ReactNode }) {
   const userId = user?.id;
   const liveRequest = useCallback<typeof request>((path, method = 'GET', data, token) => {
     if (!isTradeWrite(path, method)) return request(path, method, data, token);
-    const input = data as {ticketId?:string;requestId?:string} | undefined;
-    if ((path === 'trade/confirm' || path === 'close/confirm') && input?.ticketId && userId) {
-      const checkPath = path === 'trade/confirm' ? 'trade/check' : 'close/check';
+    const input = data as {ticketId?:string} | undefined;
+    if ((path === 'trade/confirm' || path === 'trade/quick' || path === 'close/confirm') && input?.ticketId && userId) {
+      const checkPath = path === 'close/confirm' ? 'close/check' : 'trade/check';
       return runWrite(() => request(path, method, data, token), {path:checkPath,ticketId:input.ticketId,userId});
     }
-    return runWrite(() => request(path, method, data, token), path === 'trade/quick' ? input?.requestId : undefined);
+    if (path === 'trade/quick') return Promise.reject(new ScreenError('Review a new one-tap order before submitting.'));
+    return runWrite(() => request(path, method, data, token));
   }, [runWrite, userId]);
   const checkConfirm = () => check(userId ?? '', intent => request(intent.path, 'POST', {ticketId:intent.ticketId}, token ?? undefined));
   function enterDemo(){if(loading||busy)return;demoClient.reset();setError('');setToken(DEMO_TOKEN);setUser(DEMO_USER);}

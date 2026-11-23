@@ -50,7 +50,7 @@ export default function Trade(){
     {cancelable:true,onDismiss:()=>resolve(false)},
    ));
    if(!accepted||!navigation.isFocused())return;
-   const value=await request('trade/quick','POST',{requestId},token);
+   const value=await request('trade/quick','POST',{requestId,ticketId:order.id},token);
    setResult(orderResultMessage(value));
   }
   catch(e){if(!(e instanceof TradeWriteUncertainError))setError(screenErrorMessage(e,'Could not submit trade.'));}

@@ -3,19 +3,20 @@ import { MobileTrading, tradeInput } from '../src/mobile-trading.js';
 import { MfpClient, MfpError, MfpTransportError } from '../src/mfp.js';
 import { SecretBox } from '../src/crypto.js';
 import { loadConfig } from '../src/config.js';
+import { entryClientOrderId, reconcileOrder } from '../src/mobile-order.js';
 import type { Position, TradeTicket, TradingPolicy, WorkingOrder } from '../src/types.js';
 const config=loadConfig({TELEGRAM_BOT_TOKEN:'test',DATABASE_URL:'postgres://localhost/test',ENCRYPTION_KEY:Buffer.alloc(32,1).toString('base64'),ALLOW_LIVE_TRADING:'true',DRY_RUN:'false'});
 const input={marketId:'binance|BTCUSDT',side:'buy',riskUsd:65,leverage:5,stopPercent:1,rewardRisk:2};
 const quickInput={...input,requestId:'quick-test-request-id-01'};
 afterEach(()=>vi.restoreAllMocks());
 function mocks(){
- const auth={user:vi.fn().mockResolvedValue({id:'user-a'}),connection:vi.fn().mockResolvedValue({environment:'live',encrypted_api_key:new SecretBox(config.ENCRYPTION_KEY).encrypt('fp_live_test'),selected_account_id:'account-a'}),saveTicket:vi.fn(),claimTicket:vi.fn(),cancelUnclaimedTicket:vi.fn(),ticketResult:vi.fn(),saveTicketResult:vi.fn()};
+ const auth={user:vi.fn().mockResolvedValue({id:'user-a'}),connection:vi.fn().mockResolvedValue({environment:'live',encrypted_api_key:new SecretBox(config.ENCRYPTION_KEY).encrypt('fp_live_test'),selected_account_id:'account-a'}),saveTicket:vi.fn(),claimTicket:vi.fn(),cancelUnclaimedTicket:vi.fn(),ticketResult:vi.fn(),saveTicketResult:vi.fn(),reconcileTicket:vi.fn(),withTicketWrite:vi.fn((_id,_close,_environment,run)=>run())};
  vi.spyOn(MfpClient.prototype,'getAccount').mockResolvedValue({id:'account-a',status:'active'});
  vi.spyOn(MfpClient.prototype,'getTradingPolicy').mockResolvedValue({});
  vi.spyOn(MfpClient.prototype,'listMarkets').mockResolvedValue([{id:'binance|BTCUSDT',symbol:'BTC',coin:'BTCUSDT',category:'crypto',size_precision:3}]);
  vi.spyOn(MfpClient.prototype,'listOpenPositions').mockResolvedValue([]);
  vi.spyOn(MfpClient.prototype,'getQuote').mockResolvedValue({bid:100,ask:101,mid:100,estimated_fill_price:101,estimated_fee:1});
- vi.spyOn(MfpClient.prototype,'findOrderByClientOrderId').mockResolvedValue(undefined);
+ vi.spyOn(MfpClient.prototype,'findOrderByClientOrderId').mockResolvedValue({status:'absent'});
  return {auth,trading:new MobileTrading(auth as never,config)};
 }
 function positionWithExit(side:Position['side']='long'){
@@ -45,7 +46,13 @@ async function storedTickets(){
   if(record&&!record.submitted_at&&!record.result)record.result={status:'not_submitted'};
  });
  auth.saveTicketResult.mockImplementation(async(id,result)=>{records.get(id)!.result=result;});
- return {auth,trading};
+ auth.reconcileTicket.mockImplementation(async(_session,id)=>{
+  const record=records.get(id)!;
+  const result=await reconcileOrder(new MfpClient('https://example.test','test'),entryClientOrderId(id),record.payload.accountId,record.submitted_at);
+  if(result)record.result=result;
+  return result;
+ });
+ return {auth,trading,records};
 }
 describe('native trading',()=>{
  it('rejects invalid sizing before quoting',()=>{
@@ -232,11 +239,11 @@ describe('native trading',()=>{
   const {auth,trading}=await storedTickets();
   const {ticket}=await trading.quote('session',input);
   const send=vi.spyOn(MfpClient.prototype,'placeProtectedMarketOrder').mockRejectedValue(new MfpTransportError(true));
-  const lookup=vi.mocked(MfpClient.prototype.findOrderByClientOrderId).mockResolvedValue({id:'order',status});
+  const lookup=vi.mocked(MfpClient.prototype.findOrderByClientOrderId).mockResolvedValue({status:'found',order:{id:'order',status}});
   const result={dryRun:false,status,orderId:'order'};
   await expect(trading.confirm('session',ticket.id)).resolves.toEqual(result);
   expect(lookup).toHaveBeenCalledWith(`guardian-native-${ticket.id}`,ticket.accountId);
-  expect(auth.saveTicketResult).toHaveBeenCalledWith(ticket.id,result);
+  expect(auth.saveTicketResult).toHaveBeenCalledWith(ticket.id,result,undefined);
   await expect(trading.confirm('new-session',ticket.id,true)).resolves.toEqual(result);
   expect(send).toHaveBeenCalledTimes(1);
   expect(lookup).toHaveBeenCalledTimes(1);
@@ -249,11 +256,36 @@ describe('native trading',()=>{
   await expect(trading.confirm('session',ticket.id)).rejects.toThrow('too long');
   await expect(trading.confirm('session',ticket.id,true)).rejects.toThrow('already submitted');
   expect(auth.saveTicketResult).not.toHaveBeenCalled();
-  lookup.mockResolvedValue({order_id:'order',status:'filled'});
+  lookup.mockResolvedValue({status:'found',order:{order_id:'order',status:'filled'}});
   await expect(trading.confirm('new-session',ticket.id,true)).resolves.toMatchObject({orderId:'order',status:'filled'});
   expect(send).toHaveBeenCalledTimes(1);
   expect(auth.saveTicket).toHaveBeenCalledTimes(1);
   for(const call of lookup.mock.calls)expect(call).toEqual([`guardian-native-${ticket.id}`,ticket.accountId]);
+ });
+ it('resolves only an aged confirmed absence and never resends one-tap',async()=>{
+  const {trading,records}=await storedTickets();
+  const {ticket}=await trading.quote('session',quickInput);
+  const send=vi.spyOn(MfpClient.prototype,'placeProtectedMarketOrder').mockRejectedValue(new MfpTransportError(true));
+  const lookup=vi.mocked(MfpClient.prototype.findOrderByClientOrderId);
+  await expect(trading.quick('session',{requestId:quickInput.requestId,ticketId:'wrong-ticket'})).rejects.toThrow('Review a new one-tap order');
+  await expect(trading.quick('session',{requestId:quickInput.requestId,ticketId:ticket.id})).rejects.toThrow('too long');
+  records.get(ticket.id)!.submitted_at=new Date(Date.now()-61_000);
+  lookup.mockResolvedValueOnce({status:'failed'});
+  await expect(trading.confirm('session',ticket.id,true)).rejects.toThrow('already submitted');
+  await expect(trading.confirm('session',ticket.id,true)).rejects.toThrow('This order was not sent');
+  expect(records.get(ticket.id)?.result).toEqual({status:'not_submitted'});
+  await expect(trading.quick('session',{requestId:quickInput.requestId,ticketId:ticket.id})).rejects.toThrow('This order was not sent');
+  expect(send).toHaveBeenCalledTimes(1);
+ });
+ it('records a rate-limited trade as not submitted',async()=>{
+  const {auth,trading}=await storedTickets();
+  const {ticket}=await trading.quote('session',input);
+  const send=vi.spyOn(MfpClient.prototype,'placeProtectedMarketOrder').mockRejectedValue(new MfpError('Rate limit',429));
+  await expect(trading.confirm('session',ticket.id)).rejects.toThrow('This order was not sent');
+  expect(auth.saveTicketResult).toHaveBeenCalledExactlyOnceWith(ticket.id,{status:'not_submitted'});
+  expect(MfpClient.prototype.findOrderByClientOrderId).not.toHaveBeenCalled();
+  await expect(trading.confirm('session',ticket.id,true)).rejects.toThrow('This order was not sent');
+  expect(send).toHaveBeenCalledTimes(1);
  });
  it('fences a confirm that never arrived before clearing the uncertain lock',async()=>{
   const {auth,trading}=await storedTickets();

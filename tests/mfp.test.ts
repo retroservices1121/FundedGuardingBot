@@ -121,10 +121,28 @@ describe("order write recovery", () => {
       .mockResolvedValueOnce(Response.json({ data: [receipt], next_cursor: null }))
       .mockResolvedValueOnce(Response.json({ data: [] }));
     vi.stubGlobal("fetch", request);
-    await expect(client.findOrderByClientOrderId("order /1", "account")).resolves.toEqual(receipt);
+    await expect(client.findOrderByClientOrderId("order /1", "account")).resolves.toEqual({status:"found",order:receipt});
     expect(request.mock.calls[0]![0]).toBe("https://example.test/v1/orders?client_order_id=order+%2F1&account_id=account");
     expect(request.mock.calls[0]![1].method).toBeUndefined();
-    await expect(client.findOrderByClientOrderId("missing", "account")).resolves.toBeUndefined();
+    await expect(client.findOrderByClientOrderId("missing", "account")).resolves.toEqual({status:"absent"});
+  });
+
+  it.each([{orders:[receipt]},{items:[receipt]}])("looks up an order in a wrapped list", async data => {
+    vi.stubGlobal("fetch",vi.fn().mockResolvedValue(Response.json({data})));
+    await expect(client.findOrderByClientOrderId("entry","account")).resolves.toEqual({status:"found",order:receipt});
+  });
+
+  it("distinguishes an empty list from invalid responses and failed requests", async () => {
+    vi.stubGlobal("fetch",vi.fn()
+      .mockResolvedValueOnce(Response.json({items:[]}))
+      .mockResolvedValueOnce(Response.json({data:{}}))
+      .mockResolvedValueOnce(Response.json({data:[]},{status:404}))
+      .mockResolvedValueOnce(Response.json({data:[]},{status:201}))
+      .mockRejectedValueOnce(new Error("Connection lost")));
+    await expect(client.findOrderByClientOrderId("entry","account")).resolves.toEqual({status:"absent"});
+    for (let attempt = 0; attempt < 4; attempt++) {
+      await expect(client.findOrderByClientOrderId("entry","account")).resolves.toEqual({status:"failed"});
+    }
   });
 
   it.each([429, 500, 502, 503])("retries an order on %s with backoff and the identical request", async status => {
@@ -166,6 +184,17 @@ describe("order write recovery", () => {
     }
   });
 
+  it.each(["create","close"])("preserves the rate limit after every %s attempt returns 429", async action => {
+    vi.useFakeTimers();
+    const request = vi.fn().mockImplementation(async () => Response.json({}, { status: 429 }));
+    vi.stubGlobal("fetch", request);
+    const order = action === "create" ? client.placeProtectedMarketOrder(orderInput) : client.closePosition("position",undefined,100,"close-key");
+    const rejected = expect(order).rejects.toMatchObject({ status: 429 });
+    await vi.runAllTimersAsync();
+    await rejected;
+    expect(request).toHaveBeenCalledTimes(3);
+  });
+
   it("does not retry earlier than a long Retry-After or resend on a timeout", async () => {
     const request = vi.fn()
       .mockResolvedValueOnce(Response.json({}, { status: 429, headers: { "Retry-After": "60" } }))
@@ -177,11 +206,11 @@ describe("order write recovery", () => {
     expect(request).toHaveBeenCalledTimes(2);
   });
 
-  it("keeps an earlier server failure ambiguous when a retry is denied", async () => {
+  it.each([401,429])("keeps an earlier server failure ambiguous when a retry returns %s", async status => {
     vi.useFakeTimers();
     const request = vi.fn()
       .mockResolvedValueOnce(Response.json({}, { status: 500 }))
-      .mockResolvedValueOnce(Response.json({}, { status: 401 }));
+      .mockResolvedValueOnce(Response.json({}, { status, headers: { "Retry-After": "60" } }));
     vi.stubGlobal("fetch", request);
     const rejected = expect(client.placeProtectedMarketOrder(orderInput)).rejects.toMatchObject({ status: 500 });
     await vi.runAllTimersAsync();

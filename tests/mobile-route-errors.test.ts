@@ -43,7 +43,8 @@ beforeAll(async () => {
 beforeEach(() => {
   pool.query.mockReset().mockResolvedValue({rows:[{id:'user',provider:'apple'}]});
   vi.spyOn(MobileAuth.prototype,'ticketResult').mockResolvedValue(undefined);
-  vi.spyOn(MfpClient.prototype,'findOrderByClientOrderId').mockResolvedValue(undefined);
+  vi.spyOn(MobileAuth.prototype,'withTicketWrite').mockImplementation((_id,_close,_environment,run)=>run(pool as never));
+  vi.spyOn(MfpClient.prototype,'findOrderByClientOrderId').mockResolvedValue({status:'failed'});
   vi.spyOn(MobileAuth.prototype,'connection').mockResolvedValue({
     environment:'live', selected_account_id:'account',
     encrypted_api_key:new SecretBox(config.ENCRYPTION_KEY).encrypt('test-key'),

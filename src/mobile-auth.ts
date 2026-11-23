@@ -5,6 +5,9 @@ import type { Database } from './db.js';
 import type { PoolClient } from 'pg';
 import { MobileSessionError, MobileValidationError, MobileWriteUncertainError } from './mobile-errors.js';
 import { reviewCredentials, verifyReviewPassword } from './review-login.js';
+import type { SecretBox } from './crypto.js';
+import { closeClientOrderId, MfpClient } from './mfp.js';
+import { entryClientOrderId, mobileOrderHosts, reconcileOrder } from './mobile-order.js';
 
 export const GOOGLE_IOS_CLIENT_ID = '174585846381-7nrqvpr243ndbk91gst8mjrubhkmnbdk.apps.googleusercontent.com';
 const keys = {
@@ -19,12 +22,16 @@ export function validateIdentity(payload: JWTPayload, provider: Provider, nonce?
 }
 const hash = (value: string) => createHash('sha256').update(value).digest('hex');
 type TicketMarket = { accountId: string; marketId: string };
+type TicketTable = 'mobile_trade_tickets' | 'mobile_close_tickets';
+type MobileTradeTicket = TradeTicket & {environment?: keyof typeof mobileOrderHosts};
+type PendingTicket = {payload: TicketMarket & {environment?: keyof typeof mobileOrderHosts}; submitted_at: Date};
 type CloseTicketInput = { id: string; expiresAt: number; accountId: string; [key: string]: unknown } &
   ({ kind?: undefined; marketId: string } | { kind: 'protection' });
 export class MobileAuth {
-  constructor(private db: Database) {}
+  constructor(private db: Database, private secrets?: SecretBox) {}
   async migrate() {
     await this.db.pool.query(`
+      SELECT pg_advisory_xact_lock(hashtextextended('mobile_auth_migrate', 0));
       CREATE TABLE IF NOT EXISTS mobile_identities (
         id UUID PRIMARY KEY, provider TEXT NOT NULL, subject TEXT NOT NULL,
         email TEXT, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), UNIQUE(provider, subject)
@@ -46,6 +53,16 @@ export class MobileAuth {
         payload JSONB NOT NULL, expires_at TIMESTAMPTZ NOT NULL,
         submitted_at TIMESTAMPTZ, result JSONB
       );
+      CREATE TABLE IF NOT EXISTS mobile_schema_migrations (id TEXT PRIMARY KEY);
+      WITH first_run AS (
+        INSERT INTO mobile_schema_migrations VALUES ('legacy_order_ticket_results')
+        ON CONFLICT DO NOTHING RETURNING id
+      ), close_backfill AS (
+        UPDATE mobile_close_tickets SET result='{"status":"legacy"}'::jsonb
+        WHERE submitted_at IS NOT NULL AND result IS NULL AND EXISTS (SELECT 1 FROM first_run)
+      )
+      UPDATE mobile_trade_tickets SET result='{"status":"legacy"}'::jsonb
+      WHERE submitted_at IS NOT NULL AND result IS NULL AND EXISTS (SELECT 1 FROM first_run);
       CREATE INDEX IF NOT EXISTS mobile_trade_pending_market_idx ON mobile_trade_tickets ((payload->>'accountId'), (payload->>'marketId'))
         WHERE submitted_at IS NOT NULL AND result IS NULL;
       CREATE INDEX IF NOT EXISTS mobile_close_pending_market_idx ON mobile_close_tickets ((payload->>'accountId'), (payload->>'marketId'))
@@ -169,22 +186,10 @@ export class MobileAuth {
     const user = await this.user(token);
     await this.db.pool.query(`DELETE FROM mobile_connections WHERE identity_id=$1`, [user.id]);
   }
-  private async withMarketTicket<T>({accountId,marketId}: TicketMarket, run: (client: PoolClient) => Promise<T>, sameTicket?: string) {
+  private async ticketTransaction<T>(run: (client: PoolClient) => Promise<T>) {
     const client = await this.db.pool.connect();
     try {
       await client.query('BEGIN');
-      // Serialize quote issuance and claims across both tables, including other app sessions.
-      await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',[JSON.stringify([accountId,marketId])]);
-      const pending = await client.query(`
-        SELECT 1 FROM mobile_trade_tickets
-          WHERE payload->>'accountId'=$1 AND payload->>'marketId'=$2 AND submitted_at IS NOT NULL AND result IS NULL
-            AND id IS DISTINCT FROM $3
-        UNION ALL
-        SELECT 1 FROM mobile_close_tickets
-          WHERE payload->>'accountId'=$1 AND payload->>'marketId'=$2 AND submitted_at IS NOT NULL AND result IS NULL
-            AND payload->>'kind' IS DISTINCT FROM 'protection' AND id IS DISTINCT FROM $3
-        LIMIT 1`,[accountId,marketId,sameTicket ?? null]);
-      if (pending.rowCount) throw new MobileWriteUncertainError('A previous request for this market is still being checked.');
       const result = await run(client);
       await client.query('COMMIT');
       return result;
@@ -195,12 +200,79 @@ export class MobileAuth {
       client.release();
     }
   }
-  async saveTicket(token: string, ticket: TradeTicket, reuse = false) {
+  private async withMarketTicket<T>({accountId,marketId}: TicketMarket, run: (client: PoolClient) => Promise<T>, sameTicket?: string) {
+    const outcome = await this.ticketTransaction(async client => {
+      // Serialize quote issuance and claims across both tables, including other app sessions.
+      await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',[JSON.stringify([accountId,marketId])]);
+      const pendingQuery = `
+        SELECT id,identity_id,'trade' AS kind FROM mobile_trade_tickets
+          WHERE payload->>'accountId'=$1 AND payload->>'marketId'=$2 AND submitted_at IS NOT NULL AND result IS NULL
+            AND id IS DISTINCT FROM $3
+        UNION ALL
+        SELECT id,identity_id,'close' AS kind FROM mobile_close_tickets
+          WHERE payload->>'accountId'=$1 AND payload->>'marketId'=$2 AND submitted_at IS NOT NULL AND result IS NULL
+            AND payload->>'kind' IS DISTINCT FROM 'protection' AND id IS DISTINCT FROM $3
+        LIMIT 1`;
+      const args = [accountId,marketId,sameTicket ?? null];
+      const pending = await client.query<{id: string; identity_id: string; kind: 'trade' | 'close'}>(pendingQuery,args);
+      const previous = pending.rows[0];
+      if (previous) {
+        const table = previous.kind === 'close' ? 'mobile_close_tickets' : 'mobile_trade_tickets';
+        await this.reconcilePendingTicket(client,table,previous.id,previous.identity_id);
+        // A concurrent writer may have finished, or another older ticket may still be pending.
+        const remaining = await client.query(pendingQuery,args);
+        if (remaining.rowCount) return {blocked:true} as const;
+      }
+      return {blocked:false,result:await run(client)} as const;
+    });
+    if (outcome.blocked) throw new MobileWriteUncertainError('A previous request for this market is still being checked.');
+    return outcome.result;
+  }
+  private async reconcilePendingTicket(client: PoolClient, table: TicketTable, id: string, identityId: string) {
+    // An active sender holds this row lock until its write finishes.
+    const pending = await client.query<PendingTicket>(`SELECT payload,submitted_at FROM ${table}
+      WHERE id=$1 AND identity_id=$2 AND submitted_at IS NOT NULL AND result IS NULL FOR UPDATE SKIP LOCKED`,[id,identityId]);
+    const ticket = pending.rows[0];
+    if (!ticket || !this.secrets) return;
+    const {rows:[connection]} = await client.query(`SELECT environment,encrypted_api_key,selected_account_id FROM mobile_connections WHERE identity_id=$1`,[identityId]);
+    const host = mobileOrderHosts[connection?.environment as keyof typeof mobileOrderHosts];
+    if (!host || (ticket.payload.environment && connection.environment !== ticket.payload.environment)) return;
+    let mfp: MfpClient;
+    try { mfp = new MfpClient(host,this.secrets.decrypt(connection.encrypted_api_key)); }
+    catch { return; }
+    const clientOrderId = table === 'mobile_close_tickets' ? closeClientOrderId(id) : entryClientOrderId(id);
+    const result = await reconcileOrder(mfp,clientOrderId,ticket.payload.accountId,ticket.payload.environment ? ticket.submitted_at : undefined);
+    if (!result) return;
+    if (result.status === 'not_submitted' && connection.selected_account_id !== ticket.payload.accountId) {
+      const account = await mfp.getAccount(ticket.payload.accountId).catch(() => undefined);
+      if (account?.id !== ticket.payload.accountId) return;
+    }
+    await client.query(`UPDATE ${table} SET result=$2 WHERE id=$1`,[id,JSON.stringify(result)]);
+    return result;
+  }
+  async reconcileTicket(token: string, id: string, close = false) {
+    const user = await this.user(token);
+    const table = close ? 'mobile_close_tickets' : 'mobile_trade_tickets';
+    return this.ticketTransaction(client => this.reconcilePendingTicket(client,table,id,user.id));
+  }
+  async withTicketWrite<T>(id: string, close: boolean, environment: string, run: (client: PoolClient) => Promise<T>) {
+    const table = close ? 'mobile_close_tickets' : 'mobile_trade_tickets';
+    // Start the lookup grace period at the write, including when this process exits mid-request.
+    await this.db.pool.query(`UPDATE ${table} SET submitted_at=clock_timestamp(), payload=jsonb_set(payload,'{environment}',to_jsonb($2::text))
+      WHERE id=$1 AND submitted_at IS NOT NULL AND result IS NULL`,[id,environment]);
+    return this.ticketTransaction(async client => {
+      const pending = await client.query(`SELECT id FROM ${table} WHERE id=$1 AND result IS NULL
+        AND submitted_at > clock_timestamp() - INTERVAL '60 seconds' FOR UPDATE`,[id]);
+      if (!pending.rowCount) throw new MobileValidationError('This request is no longer available. Review a new quote.');
+      return run(client);
+    });
+  }
+  async saveTicket(token: string, ticket: MobileTradeTicket, reuse = false) {
     const user = await this.user(token);
     const result = await this.withMarketTicket(ticket,client => client.query(`INSERT INTO mobile_trade_tickets (id,identity_id,payload,expires_at) VALUES ($1,$2,$3,$4)${reuse ? ' ON CONFLICT (id) DO NOTHING' : ''}`,[ticket.id,user.id,JSON.stringify(ticket),new Date(ticket.expiresAt)]),reuse ? ticket.id : undefined);
     return result.rowCount !== 0;
   }
-  private async claimMarketTicket(table: 'mobile_trade_tickets' | 'mobile_close_tickets', token: string, id: string) {
+  private async claimMarketTicket(table: TicketTable, token: string, id: string) {
     const user = await this.user(token);
     const kind = table === 'mobile_close_tickets' ? " AND payload->>'kind' IS DISTINCT FROM 'protection'" : '';
     const available = `id=$1 AND identity_id=$2 AND submitted_at IS NULL AND result IS NULL AND expires_at>statement_timestamp()${kind}`;
@@ -210,11 +282,11 @@ export class MobileAuth {
     if (!payload) return;
     const result = await this.withMarketTicket(payload,async client => {
       // A same-ticket claim may win between the initial read and the lock.
-      return client.query(`UPDATE ${table} SET submitted_at=NOW() WHERE ${available} RETURNING payload`,args);
+      return client.query(`UPDATE ${table} SET submitted_at=statement_timestamp() WHERE ${available} RETURNING payload`,args);
     },id);
     return result.rows[0]?.payload;
   }
-  async claimTicket(token: string, id: string): Promise<TradeTicket | undefined> {
+  async claimTicket(token: string, id: string): Promise<MobileTradeTicket | undefined> {
     return this.claimMarketTicket('mobile_trade_tickets',token,id);
   }
   async cancelUnclaimedTicket(token: string, id: string, close = false) {
@@ -230,8 +302,8 @@ export class MobileAuth {
     const result = await this.db.pool.query(`SELECT payload,result,submitted_at FROM mobile_trade_tickets WHERE id=$1 AND identity_id=$2`,[id,user.id]);
     return result.rows[0];
   }
-  async saveTicketResult(id: string, result: unknown) {
-    await this.db.pool.query(`UPDATE mobile_trade_tickets SET result=$2 WHERE id=$1`,[id,JSON.stringify(result)]);
+  async saveTicketResult(id: string, result: unknown, client: Pick<PoolClient, 'query'> = this.db.pool) {
+    await client.query(`UPDATE mobile_trade_tickets SET result=$2 WHERE id=$1 AND result IS NULL`,[id,JSON.stringify(result)]);
   }
   async saveClose(token: string, input: CloseTicketInput) {
     const user = await this.user(token);
@@ -251,8 +323,8 @@ export class MobileAuth {
     const result = await this.db.pool.query('SELECT payload,result,submitted_at FROM mobile_close_tickets WHERE id=$1 AND identity_id=$2',[id,user.id]);
     return result.rows[0];
   }
-  async saveCloseResult(id: string, result: unknown) {
-    await this.db.pool.query('UPDATE mobile_close_tickets SET result=$2 WHERE id=$1',[id,JSON.stringify(result)]);
+  async saveCloseResult(id: string, result: unknown, client: Pick<PoolClient, 'query'> = this.db.pool) {
+    await client.query('UPDATE mobile_close_tickets SET result=$2 WHERE id=$1 AND result IS NULL',[id,JSON.stringify(result)]);
   }
   async closeTicketSubmitted(token: string, id: string) {
     const user = await this.user(token);

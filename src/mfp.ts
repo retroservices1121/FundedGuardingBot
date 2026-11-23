@@ -4,6 +4,14 @@ import type { ChallengeAccount, Market, Position, Quote, Side, TradingPolicy, Wo
 interface ApiEnvelope<T> {
   data: T;
 }
+type OrderList<T> = T[] | { orders?: T[]; items?: T[] };
+
+function orderList<T>(result: OrderList<T> | undefined) {
+  const orders = Array.isArray(result) ? result : result?.orders ?? result?.items;
+  return Array.isArray(orders) ? orders : undefined;
+}
+
+type OrderLookup = { status: "found"; order: Record<string, unknown> } | { status: "absent" | "failed" };
 
 type RawMarket = Omit<Market, "id"> & { id?: unknown; market_id?: unknown };
 
@@ -94,7 +102,7 @@ export class MfpClient {
     private readonly apiKey: string,
   ) {}
 
-  private async request<T>(path: string, init: RequestInit = {}): Promise<T> {
+  private async request<T>(path: string, init: RequestInit = {}, allowBareList = false): Promise<T> {
     const signal = AbortSignal.timeout(12_000);
     const response = await fetch(`${this.baseUrl}${path}`, {
       ...init,
@@ -139,6 +147,10 @@ export class MfpClient {
         error?.details,
         error?.rule_id,
       );
+    }
+    if (allowBareList) {
+      if (response.status !== 200 || payload?.error) throw new MfpError("Could not check the order with MyFundedPerps.", response.status);
+      return (payload as ApiEnvelope<T>)?.data ?? payload as T;
     }
     return (payload as ApiEnvelope<T>)?.data;
   }
@@ -242,15 +254,22 @@ export class MfpClient {
 
   async listWorkingOrders(accountId: string) {
     const query = new URLSearchParams({ account_id: accountId, status: "working" });
-    const result = await this.request<WorkingOrder[] | { orders?: WorkingOrder[]; items?: WorkingOrder[] }>(`/v1/orders?${query}`);
+    const result = await this.request<OrderList<WorkingOrder>>(`/v1/orders?${query}`);
     if (Array.isArray(result)) return result;
     return result.orders ?? result.items ?? [];
   }
 
-  async findOrderByClientOrderId(clientOrderId: string, accountId: string) {
+  async findOrderByClientOrderId(clientOrderId: string, accountId: string): Promise<OrderLookup> {
     const query = new URLSearchParams({ client_order_id: clientOrderId, account_id: accountId });
-    const orders = await this.request<Record<string, unknown>[]>(`/v1/orders?${query}`);
-    return Array.isArray(orders) && orders.length === 1 ? orders[0] : undefined;
+    const result = await this.request<OrderList<Record<string, unknown>>>(`/v1/orders?${query}`, {}, true).catch(() => undefined);
+    const orders = orderList(result);
+    if (orders?.length === 0) return { status: "absent" };
+    if (orders?.length === 1 && orders[0] && typeof orders[0] === "object") {
+      const order = orders[0];
+      if ((order.client_order_id === undefined || order.client_order_id === clientOrderId) &&
+          (order.account_id === undefined || order.account_id === accountId)) return { status: "found", order };
+    }
+    return { status: "failed" };
   }
 
   cancelOrder(orderId: string) {

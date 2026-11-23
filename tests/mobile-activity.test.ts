@@ -1,13 +1,14 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { closeSize, MobileActivity } from '../src/mobile-activity.js';
-import { MfpClient, MfpTransportError } from '../src/mfp.js';
+import { closeClientOrderId, MfpClient, MfpError, MfpTransportError } from '../src/mfp.js';
 import { SecretBox } from '../src/crypto.js';
 import { loadConfig } from '../src/config.js';
+import { reconcileOrder } from '../src/mobile-order.js';
 const config=loadConfig({TELEGRAM_BOT_TOKEN:'test',DATABASE_URL:'postgres://localhost/test',ENCRYPTION_KEY:Buffer.alloc(32,1).toString('base64'),ALLOW_LIVE_TRADING:'true',DRY_RUN:'false'});
 afterEach(()=>vi.restoreAllMocks());
 function setup(){
  const position={id:'p',account_id:'a',market_id:'binance|EUR',side:'long',size:346494.3,symbol:'EUR'};
- const auth={connection:vi.fn().mockResolvedValue({environment:'live',selected_account_id:'a',encrypted_api_key:new SecretBox(config.ENCRYPTION_KEY).encrypt('fp_live_test')}),saveClose:vi.fn(),claimClose:vi.fn(),closeTicketResult:vi.fn(),saveCloseResult:vi.fn(),cancelUnclaimedTicket:vi.fn()};
+ const auth={connection:vi.fn().mockResolvedValue({environment:'live',selected_account_id:'a',encrypted_api_key:new SecretBox(config.ENCRYPTION_KEY).encrypt('fp_live_test')}),saveClose:vi.fn(),claimClose:vi.fn(),closeTicketResult:vi.fn(),saveCloseResult:vi.fn(),cancelUnclaimedTicket:vi.fn(),reconcileTicket:vi.fn(),withTicketWrite:vi.fn((_id,_close,_environment,run)=>run())};
  vi.spyOn(MfpClient.prototype,'listOpenPositions').mockResolvedValue([position as never]);
  vi.spyOn(MfpClient.prototype,'listMarkets').mockResolvedValue([{id:'binance|EUR',size_precision:1}]);
  vi.spyOn(MfpClient.prototype,'getQuote').mockResolvedValue({mid:1.16,bid:1.15,ask:1.16,estimated_fee:10});
@@ -52,17 +53,27 @@ describe('native position closing',()=>{
   auth.claimClose.mockResolvedValueOnce(ticket);
   auth.closeTicketResult.mockResolvedValue({payload:ticket,submitted_at:new Date()});
   close.mockRejectedValue(new MfpTransportError(true));
-  const lookup=vi.spyOn(MfpClient.prototype,'findOrderByClientOrderId').mockResolvedValueOnce(undefined)
-   .mockResolvedValueOnce({id:'close-order',status:'filled'});
+  const lookup=vi.spyOn(MfpClient.prototype,'findOrderByClientOrderId').mockResolvedValueOnce({status:'failed'})
+   .mockResolvedValueOnce({status:'found',order:{id:'close-order',status:'filled'}});
+  auth.reconcileTicket.mockImplementation((_session,id)=>reconcileOrder(new MfpClient('https://example.test','test'),closeClientOrderId(id),ticket.accountId));
   await expect(activity.confirmClose('session',ticket.id)).rejects.toThrow('too long');
   expect(auth.saveCloseResult).not.toHaveBeenCalled();
   vi.mocked(MfpClient.prototype.listOpenPositions).mockResolvedValue([]);
   const result={dryRun:false,status:'filled',orderId:'close-order'};
   await expect(activity.confirmClose('new-session',ticket.id,true)).resolves.toEqual(result);
   expect(lookup).toHaveBeenLastCalledWith(`guardian-close-${ticket.id}`,ticket.accountId);
-  expect(auth.saveCloseResult).toHaveBeenCalledWith(ticket.id,result);
+  expect(auth.reconcileTicket).toHaveBeenCalledExactlyOnceWith('new-session',ticket.id,true);
   auth.closeTicketResult.mockResolvedValue({payload:ticket,submitted_at:new Date(),result});
   await expect(activity.confirmClose('new-session',ticket.id)).resolves.toEqual(result);
+  expect(close).toHaveBeenCalledTimes(1);
+ });
+ it('records a rate-limited close as not submitted',async()=>{
+  const {activity,auth,close}=setup();
+  const {ticket}=await activity.quoteClose('session',{positionId:'p',percent:100});
+  auth.claimClose.mockResolvedValueOnce(ticket);
+  close.mockRejectedValue(new MfpError('Rate limit',429));
+  await expect(activity.confirmClose('session',ticket.id)).rejects.toThrow('This close was not sent');
+  expect(auth.saveCloseResult).toHaveBeenCalledExactlyOnceWith(ticket.id,{status:'not_submitted'});
   expect(close).toHaveBeenCalledTimes(1);
  });
 });

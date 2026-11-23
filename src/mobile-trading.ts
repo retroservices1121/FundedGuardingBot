@@ -8,10 +8,8 @@ import { MfpClient, MfpError, isActiveAccount, positionExitOrders } from './mfp.
 import { SecretBox } from './crypto.js';
 import { buildTicket, calculateSize, marketAllowsOpening, platformRuleCheck, tradingPolicyProblems } from './risk.js';
 import type { PersonalGuards } from './mobile-guards.js';
-import { orderRequestRejected, reconcileOrder, submitOrder } from './mobile-order.js';
+import { entryClientOrderId, mobileOrderHosts as hosts, orderRequestRejected, submitOrder } from './mobile-order.js';
 
-const hosts={live:'https://developers.myfundedperpetuals.com',sandbox:'https://sandbox.myfundedperpetuals.com'};
-const entryClientOrderId=(id:string)=>`guardian-native-${id}`;
 function blockTrade(problems:string[]){
   if(problems.length)throw new MobileValidationError(`Trade blocked. ${problems.join(' ')}`);
 }
@@ -65,7 +63,7 @@ export class MobileTrading {
     const first=await client.getQuote(market.id);
     const size=calculateSize(values.riskUsd,first.mid,values.stopPercent,market);
     const quote=await client.getQuote(market.id,values.side,size);
-    const ticket=buildTicket({id,userId:0,accountId:account.id,market,symbol:String(market.symbol??market.id.split('|').at(-1)),...values,quote,size,ttlSeconds:this.config.CONFIRMATION_TTL_SECONDS});
+    const ticket={...buildTicket({id,userId:0,accountId:account.id,market,symbol:String(market.symbol??market.id.split('|').at(-1)),...values,quote,size,ttlSeconds:this.config.CONFIRMATION_TTL_SECONDS}),environment:connection.environment as keyof typeof hosts};
     if(quote.fillable===false)throw new MobileValidationError('This order size cannot be filled right now.');
     ticket.platformRules=platformRuleCheck({account,policy,market,ticket,openPositions:positions});
     const replacement=await exitReplacement(client,ticket,positions);
@@ -91,6 +89,7 @@ export class MobileTrading {
   }
   async quick(token:string,input:Record<string,unknown>){
     const id=await this.quickId(token,input.requestId);
+    if(input.ticketId!==undefined&&input.ticketId!==id)throw new MobileValidationError('Review a new one-tap order before submitting.');
     const {ticket}=await this.quickQuote(token,{...input,reviewExitReplacement:false},id);
     const result=await this.confirm(token,id);
     return {...result,warnings:ticket.platformRules?.warnings??[]};
@@ -104,9 +103,9 @@ export class MobileTrading {
       if(previous?.result?.status==='not_submitted')throw new MobileValidationError('This order was not sent. Review a new quote.');
       if(previous?.result)return previous.result;
       if(previous?.submitted_at){
-        const lookup=await this.connection(token).catch(()=>undefined);
-        const result=lookup&&await reconcileOrder(lookup.client,entryClientOrderId(id),previous.payload.accountId);
-        if(result){await this.auth.saveTicketResult(id,result);return result;}
+        const result=await this.auth.reconcileTicket(token,id);
+        if(result?.status==='not_submitted')throw new MobileValidationError('This order was not sent. Review a new quote.');
+        if(result)return result;
         throw new MobileWriteUncertainError('This request was already submitted.');
       }
       throw new MobileValidationError(quick?'Quote expired. Tap the saved amount again.':'Quote expired. Review a new quote.');
@@ -115,7 +114,7 @@ export class MobileTrading {
     try{
       const {connection,client}=await this.connection(token);
       if(quick)checkQuickPrefs(connection.personal_guards,ticket.riskUsd);
-      if(connection.selected_account_id!==ticket.accountId)throw new MobileValidationError('Selected account changed. Review a new quote.');
+      if(connection.selected_account_id!==ticket.accountId||(ticket.environment&&connection.environment!==ticket.environment))throw new MobileValidationError('Selected account changed. Review a new quote.');
       const [account,policy,markets,positions]=await Promise.all([client.getAccount(ticket.accountId),client.getTradingPolicy(ticket.accountId),client.listMarkets(),client.listOpenPositions(ticket.accountId)]);
       if(!isActiveAccount(account))throw new MobileValidationError('The account is no longer active.');
       const market=markets.find(m=>m.id===ticket.marketId);
@@ -129,13 +128,16 @@ export class MobileTrading {
         throw new MobileValidationError('The position or its exits changed. Review a new quote before trading.');
       }
       if(this.config.DRY_RUN){const result={dryRun:true,status:'validated'};await this.auth.saveTicketResult(id,result);return result;}
-      if (Date.now() >= ticket.expiresAt) throw new MobileValidationError(quick?'Quote expired. Tap the saved amount again.':'Quote expired. Review a new quote.');
-      submitted=true;
       const clientOrderId=entryClientOrderId(ticket.id);
-      const result=await submitOrder(client,clientOrderId,ticket.accountId,()=>client.placeProtectedMarketOrder({accountId:ticket.accountId,marketId:ticket.marketId,side:ticket.side,size:ticket.size,expectedPrice:ticket.expectedPrice,leverage:ticket.leverage,stopLossPrice:ticket.stopLossPrice,takeProfitPrice:ticket.takeProfitPrice,replaceOverlappingExits:replacement?true:undefined,clientOrderId,idempotencyKey:ticket.id}));
-      await this.auth.saveTicketResult(id,result);return result;
+      return await this.auth.withTicketWrite(id,false,connection.environment,async locked=>{
+        if (Date.now() >= ticket.expiresAt) throw new MobileValidationError(quick?'Quote expired. Tap the saved amount again.':'Quote expired. Review a new quote.');
+        submitted=true;
+        const result=await submitOrder(client,clientOrderId,ticket.accountId,()=>client.placeProtectedMarketOrder({accountId:ticket.accountId,marketId:ticket.marketId,side:ticket.side,size:ticket.size,expectedPrice:ticket.expectedPrice,leverage:ticket.leverage,stopLossPrice:ticket.stopLossPrice,takeProfitPrice:ticket.takeProfitPrice,replaceOverlappingExits:replacement?true:undefined,clientOrderId,idempotencyKey:ticket.id}));
+        await this.auth.saveTicketResult(id,result,locked);return result;
+      });
     }catch(e){
       if(!submitted||orderRequestRejected(e))await this.auth.saveTicketResult(id,{status:'not_submitted'});
+      if(submitted&&e instanceof MfpError&&e.status===429)throw new MobileValidationError('MyFundedPerps is receiving too many requests. This order was not sent. Try again shortly.');
       if(e instanceof MfpError&&e.status===422&&e.ruleId==='exit-allocation'){
         throw new MobileValidationError('MyFundedPerps could not replace the existing exits. Check the take profit and stop loss on the position, then review a new quote.');
       }
