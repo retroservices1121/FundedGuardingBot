@@ -92,6 +92,56 @@ function telegramPost(path: string, data: unknown) {
   });
 }
 
+describe('public legal pages', () => {
+  it('links to the legal pages from the landing page footer', async () => {
+    const response = await apiFetch(new URL('/', base));
+    expect(response.status).toBe(200);
+    const footer = (await response.text()).match(/<footer>[\s\S]*?<\/footer>/)?.[0];
+    for (const route of ['/privacy', '/terms', '/support']) {
+      expect(footer).toContain(`href="${route}"`);
+    }
+  });
+
+  it.each([
+    ['/privacy', 'Privacy Policy'],
+    ['/terms', 'Terms of Use'],
+    ['/support', 'Support'],
+  ])('serves %s and its .html alias for GET and HEAD', async (route, title) => {
+    for (const path of [route, `${route}.html`]) {
+      const url = new URL(path, base);
+      const response = await apiFetch(url);
+      expect(response.status).toBe(200);
+      expect(response.headers.get('content-type')).toBe('text/html; charset=utf-8');
+      expect(response.headers.get('content-security-policy')).toContain("script-src 'self';");
+      expect(response.headers.get('content-security-policy')).toContain("frame-ancestors 'none';");
+      expect(response.headers.get('x-content-type-options')).toBe('nosniff');
+      expect(response.headers.get('referrer-policy')).toBe('strict-origin-when-cross-origin');
+      const html = await response.text();
+      expect(html).toContain(`<h1>${title}</h1>`);
+      expect(html).toContain('href="/legal/legal.css"');
+      expect(html).not.toContain('<script');
+
+      const head = await apiFetch(url, {method:'HEAD'});
+      expect(head.status).toBe(200);
+      expect(head.headers.get('content-type')).toBe('text/html; charset=utf-8');
+      expect(await head.text()).toBe('');
+    }
+  });
+
+  it('serves the legal stylesheet', async () => {
+    const response = await apiFetch(new URL('/legal/legal.css', base));
+    expect(response.status).toBe(200);
+    expect(response.headers.get('content-type')).toBe('text/css; charset=utf-8');
+    expect(await response.text()).toContain('.notice{');
+  });
+
+  it.each(['/unknown', '/legal/unknown.css', '/privacy/unknown'])('returns 404 for %s', async path => {
+    const response = await apiFetch(new URL(path, base));
+    expect(response.status).toBe(404);
+    expect(await response.json()).toEqual({error:'Not found.'});
+  });
+});
+
 describe('Telegram trading policy checks', () => {
   beforeEach(() => {
     Object.values(telegramDb).forEach(mock => mock.mockReset());

@@ -4,6 +4,8 @@ Free multi-user Telegram guardian for MyFundedPerps challenge accounts. Every Te
 
 The repository now includes a mobile-first Telegram Mini App served by the same Railway service. The bot remains the alert and onboarding layer; the Mini App provides the visual Guardian, trading, positions, and history experience.
 
+[Privacy Policy](https://fundedguardian.xyz/privacy) · [Terms of Use](https://fundedguardian.xyz/terms) · [Support](https://fundedguardian.xyz/support)
+
 ## Customer journey
 
 1. Customer opens the bot and taps **Connect MyFundedPerps**.

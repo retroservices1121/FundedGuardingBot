@@ -786,11 +786,18 @@ export function startMiniAppServer(config: Config, db: Database) {
       }
       if (url.pathname === "/health") return json(response, 200, { ok: true });
       if (url.pathname.startsWith("/api/landing/")) return void await landingApi(request, response, url.pathname);
-      if ((request.method === "GET" || request.method === "HEAD") && (url.pathname === "/" || /^\/landing\/(?:landing\.js|image-[a-f0-9]{16}\.(?:png|jpg))$/.test(url.pathname))) {
-        const file = url.pathname === "/" ? "index.html" : url.pathname.slice("/landing/".length);
-        const content = await readFile(path.join(process.cwd(), "public", "landing", file));
+      const legalPage = /^\/(privacy|terms|support)(?:\.html)?$/.exec(url.pathname);
+      const legalStylesheet = url.pathname === "/legal/legal.css";
+      const landingAsset = url.pathname === "/" || /^\/landing\/(?:landing\.js|image-[a-f0-9]{16}\.(?:png|jpg))$/.test(url.pathname);
+      if ((request.method === "GET" || request.method === "HEAD") && (legalPage || legalStylesheet || landingAsset)) {
+        const directory = legalPage || legalStylesheet ? "legal" : "landing";
+        const file = legalPage ? `${legalPage[1]}.html` : legalStylesheet ? "legal.css" :
+          url.pathname === "/" ? "index.html" : url.pathname.slice("/landing/".length);
+        const content = await readFile(path.join(process.cwd(), "public", directory, file));
         response.writeHead(200, {
-          "Content-Type": file.endsWith(".html") ? "text/html; charset=utf-8" : file.endsWith(".js") ? "text/javascript; charset=utf-8" : file.endsWith(".png") ? "image/png" : "image/jpeg",
+          "Content-Type": file.endsWith(".html") ? "text/html; charset=utf-8" :
+            legalStylesheet ? "text/css; charset=utf-8" : file.endsWith(".js") ? "text/javascript; charset=utf-8" :
+            file.endsWith(".png") ? "image/png" : "image/jpeg",
           "Cache-Control": file.startsWith("image-") ? "public, max-age=86400" : "no-cache",
           "Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self';",
           "X-Content-Type-Options": "nosniff",
