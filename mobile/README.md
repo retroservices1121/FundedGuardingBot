@@ -2,7 +2,7 @@
 
 Funded Guardian is an Expo and React Native app for managing a MyFundedPerps challenge account. It uses the Guardian backend in this repository.
 
-[Privacy Policy](https://fundedguardian.xyz/privacy) · [Terms of Use](https://fundedguardian.xyz/terms) · [Support](https://fundedguardian.xyz/support)
+[Privacy Policy](https://fundedguardian.xyz/privacy) · [Terms of Use](https://fundedguardian.xyz/terms) · [DM us on X @FundedGuardian](https://x.com/FundedGuardian)
 
 ## Features
 

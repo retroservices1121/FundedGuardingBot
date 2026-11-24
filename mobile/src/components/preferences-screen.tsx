@@ -6,12 +6,12 @@ import AccountOnboarding from './AccountOnboarding';
 import { useEffect, useRef, useState } from 'react';
 import { Alert, Linking, Pressable, ScrollView, Text, TextInput, View, StyleSheet } from 'react-native';
 import { useSession } from '../../App';
-import { APP_PAGE_URLS, TRADING_DISCLAIMER } from '../lib/app-information';
+import { APP_PAGE_URLS, SUPPORT_CONTACT_LABEL, TRADING_DISCLAIMER } from '../lib/app-information';
 
 const informationLinks = [
  {label:'Privacy Policy',url:APP_PAGE_URLS.privacy},
  {label:'Terms of Use',url:APP_PAGE_URLS.terms},
- {label:'Support',url:APP_PAGE_URLS.support},
+ {label:SUPPORT_CONTACT_LABEL,url:APP_PAGE_URLS.support},
 ];
 
 export default function Settings(){

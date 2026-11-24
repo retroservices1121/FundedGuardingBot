@@ -2,7 +2,7 @@
 
 The existing bot service serves the public landing page at `/`. Telegram stays at `/app`, and mobile API routes stay unchanged. The existing Dockerfile includes `public`, so no separate Railway service or build command is needed.
 
-The landing page footer links to [Privacy](https://fundedguardian.xyz/privacy), [Terms](https://fundedguardian.xyz/terms), and [Support](https://fundedguardian.xyz/support). Edit these pages in `public/legal/`.
+The landing page footer links to [Privacy](https://fundedguardian.xyz/privacy), [Terms](https://fundedguardian.xyz/terms), [Support](https://fundedguardian.xyz/support), and [X](https://x.com/FundedGuardian). Edit the legal pages in `public/legal/`.
 
 Optional Railway variables:
 
@@ -18,7 +18,7 @@ SELECT email, marketing_consent, consent_version, created_at, updated_at
 FROM landing_beta_signups ORDER BY created_at DESC;
 ```
 
-Only use rows with `marketing_consent = TRUE` for marketing. Handle deletion or consent-withdrawal requests received through the listed Telegram support contact. There is no public email-list endpoint.
+Only use rows with `marketing_consent = TRUE` for marketing. Handle deletion or consent-withdrawal requests sent through the signup form’s [DM us on X @FundedGuardian](https://x.com/FundedGuardian) link. There is no public email-list endpoint.
 
 To delete a requested email, use a parameterized query through your private database client:
 `DELETE FROM landing_beta_signups WHERE email = $1`.

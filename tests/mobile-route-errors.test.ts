@@ -93,13 +93,19 @@ function telegramPost(path: string, data: unknown) {
 }
 
 describe('public legal pages', () => {
-  it('links to the legal pages from the landing page footer', async () => {
+  const supportLink = '<a href="https://x.com/FundedGuardian">DM us on X @FundedGuardian</a>';
+
+  it('links to the legal pages, X and the Telegram mini app from the landing page footer', async () => {
     const response = await apiFetch(new URL('/', base));
     expect(response.status).toBe(200);
-    const footer = (await response.text()).match(/<footer>[\s\S]*?<\/footer>/)?.[0];
+    const html = await response.text();
+    const footer = html.match(/<footer>[\s\S]*?<\/footer>/)?.[0];
     for (const route of ['/privacy', '/terms', '/support']) {
       expect(footer).toContain(`href="${route}"`);
     }
+    expect(footer).toContain(supportLink);
+    expect(footer).toContain('href="https://t.me/fundedguardianbot"');
+    expect(html).toContain(`${supportLink} to withdraw consent or request removal.`);
   });
 
   it.each([
@@ -119,6 +125,7 @@ describe('public legal pages', () => {
       const html = await response.text();
       expect(html).toContain(`<h1>${title}</h1>`);
       expect(html).toContain('href="/legal/legal.css"');
+      expect(html).toContain(supportLink);
       expect(html).not.toContain('<script');
 
       const head = await apiFetch(url, {method:'HEAD'});
