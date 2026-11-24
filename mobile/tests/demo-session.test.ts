@@ -31,6 +31,13 @@ describe('local demo boundary',()=>{
   vi.advanceTimersByTime(60001);await expect(a.request('close/confirm','POST',{ticketId:close.ticket.id})).rejects.toThrow('expired');
   a.reset();expect((await a.request('guards')).mode).toBe('off');
  });
+ it('turns off demo one-tap trading while keeping the other preferences',async()=>{
+  const {request}=createDemoClient();
+  const prefs={mode:'warn',maxRiskUsd:30,quickAmounts:[10,20,30],quickTradeEnabled:true};
+  await request('guards','POST',prefs);
+  await request('guards','POST',{quickTradeEnabled:false});
+  expect(await request('guards')).toEqual({...prefs,quickTradeEnabled:false});
+ });
  it('creates usable sample candles for every market and timeframe',()=>{
   for(const m of demoMarkets)for(const interval of ['1m','5m','15m','30m','1h','4h']){
    const chart=demoChart(m.provider,m.coin,interval);expect(chart.status).toBe('Sample data');expect(chart.bars).toHaveLength(70);

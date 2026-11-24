@@ -1,10 +1,19 @@
 import { describe, expect, it } from "vitest";
-import { accountRisk, accountRuleProgress, buildTicket, calculateSize, guardAccount, platformRuleCheck, resolveAccountRequirements } from "../src/risk.js";
+import { ticketMessage } from "../src/format.js";
+import { accountRisk, accountRuleProgress, buildTicket, calculateSize, guardAccount, platformRuleCheck, resolveAccountRequirements, roundMarketSize } from "../src/risk.js";
 
 describe("risk sizing", () => {
   it("sizes from dollars at risk and rounds down", () => {
-    expect(calculateSize(100, 100_000, 0.5, 3)).toBe(0.2);
-    expect(calculateSize(75, 2_000, 0.5, 2)).toBe(7.5);
+    expect(calculateSize(100, 100_000, 0.5, { id: "btc", size_precision: 3 })).toBe(0.2);
+    expect(calculateSize(75, 2_000, 0.5, { id: "eth", size_decimals: 2 })).toBe(7.5);
+  });
+
+  it("uses the official step before precision and never rounds up", () => {
+    expect(roundMarketSize(1.19, { id: "a", size_step: 0.25, size_decimals: 3 })).toBe(1);
+    expect(roundMarketSize(0.3, { id: "a", size_step: 0.1 })).toBe(0.3);
+    expect(roundMarketSize(0.29999999999999993, { id: "a", size_step: 0.1 })).toBe(0.2);
+    expect(roundMarketSize(8e-8, { id: "a", size_step: 3e-8 })).toBe(6e-8);
+    expect(roundMarketSize(1.19, { id: "a" })).toBeUndefined();
   });
 
   it("builds correct long and short exits", () => {
@@ -19,6 +28,26 @@ describe("risk sizing", () => {
     expect(long.takeProfitPrice).toBe(101_000);
     expect(short.stopLossPrice).toBe(100_500);
     expect(short.takeProfitPrice).toBe(99_000);
+  });
+
+  it("allows exactly 10% drift and shows the quoted stop distance", () => {
+    const market = { id: "btc", size_step: 0.25 };
+    const size = calculateSize(1.1, 100, 1, market);
+    const ticket = buildTicket({
+      id: "t", userId: 1, accountId: "a", market, symbol: "BTC",
+      side: "buy", riskUsd: 1.1, quote: { bid: 99, ask: 101, mid: 100 }, size,
+      stopPercent: 1, rewardRisk: 2, leverage: 1, ttlSeconds: 45,
+    });
+    expect(ticket.stopLossPrice).toBe(98.9);
+    expect(ticketMessage(ticket, false)).toContain("Stop loss: $98.90 (1.1% from entry)");
+  });
+
+  it.each([89, 112])("rejects stop drift in either direction at entry %s", (entry) => {
+    expect(() => buildTicket({
+      id: "t", userId: 1, accountId: "a", market: { id: "btc", size_step: 0.25 }, symbol: "BTC",
+      side: "sell", riskUsd: 1, quote: { bid: 99, ask: 101, mid: 100, estimated_fill_price: entry }, size: 1,
+      stopPercent: 1, rewardRisk: 2, leverage: 1, ttlSeconds: 45,
+    })).toThrow("move your stop loss more than 10%");
   });
 });
 
@@ -45,6 +74,24 @@ describe("guardian", () => {
     expect(progress.profit).toMatchObject({ targetAmount: 8_000, achievedAmount: 3_420, achievedPercent: 42.75 });
     expect(progress.dailyLoss).toMatchObject({ limitAmount: 3_000, usedAmount: 1_500, usedPercent: 50 });
     expect(progress.maxDrawdown).toMatchObject({ limitAmount: 6_000, usedAmount: 1_500, usedPercent: 25 });
+  });
+
+  it("uses equity to show pass progress, including a zero remaining amount", () => {
+    const account = { id: "a", starting_balance: 25_000, risk: {
+      remaining_profit: 1_000,
+      remaining_profit_equity: 500,
+      requirements: { profit_target_pct: 8 },
+    } };
+    expect(accountRuleProgress(account).profit).toMatchObject({ remaining: 500, achievedAmount: 1_500, achievedPercent: 75 });
+    account.risk.remaining_profit_equity = 0;
+    expect(accountRuleProgress(account).profit).toMatchObject({ remaining: 0, achievedPercent: 100 });
+  });
+
+  it("preserves unavailable equity progress and only falls back for older snapshots", () => {
+    const risk = { marks_complete: false, remaining_profit: 1_000, requirements: { profit_target_pct: 8 } };
+    const account = { id: "a", starting_balance: 25_000, risk: { ...risk, remaining_profit_equity: null } };
+    expect(accountRuleProgress(account).profit).toMatchObject({ remaining: undefined, achievedPercent: undefined });
+    expect(accountRuleProgress({ ...account, risk }).profit.remaining).toBe(1_000);
   });
 
   it("scales the same percentage rules to each account size", () => {
@@ -103,7 +150,7 @@ describe("guardian", () => {
       100,
       20,
     );
-    expect(problems).toContain("Opening exposure is restricted.");
+    expect(problems).toContain("This account cannot open or increase positions right now.");
     expect(problems.some((p) => p.includes("remaining loss room"))).toBe(true);
   });
 
@@ -116,14 +163,14 @@ describe("guardian", () => {
 
   it("reports account-specific estimates without locally blocking the order", () => {
     const ticket = buildTicket({
-      id: "t", userId: 1, accountId: "a", market: { id: "gold", max_leverage: 3 }, symbol: "GOLD",
+      id: "t", userId: 1, accountId: "a", market: { id: "gold", max_leverage: 3, size_decimals: 6 }, symbol: "GOLD",
       side: "buy", riskUsd: 150, quote: { bid: 4287, ask: 4288, mid: 4287.5, estimated_notional: 30_000, estimated_fee: 1.5 },
       stopPercent: 0.5, rewardRisk: 2, leverage: 4, ttlSeconds: 45,
     });
     const check = platformRuleCheck({
       account: { id: "a", status: "active", risk: { available_balance: 5_000 } },
       policy: { limits: { max_position_value_usd: 25_000, max_open_positions: 1 } },
-      market: { id: "gold", max_leverage: 3 },
+      market: { id: "gold", max_leverage: 3, size_decimals: 6 },
       ticket,
       openPositions: [{ id: "p", market_id: "btc" } as never],
     });

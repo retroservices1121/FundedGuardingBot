@@ -1,7 +1,7 @@
-import {router} from 'expo-router';
+import {Link,router} from 'expo-router';
 import {SafeAreaView} from 'react-native-safe-area-context';
 import {createDemoClient,DEMO_TOKEN,DEMO_USER} from './src/lib/demo-session';
-import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 import { ActivityIndicator, Image, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import LoginCandles from './src/components/LoginCandles';
 import { StatusBar } from 'expo-status-bar';
@@ -10,28 +10,17 @@ import * as Apple from 'expo-apple-authentication';
 import * as SecureStore from 'expo-secure-store';
 import { GoogleSignin, isSuccessResponse } from '@react-native-google-signin/google-signin';
 
+import { isTradeWrite, type ConfirmRetry } from './src/lib/trade-write';
+import { ScreenError, screenErrorMessage } from './src/lib/screen-error';
+import { createMobileRequest, serverUnavailableMessage, SessionError } from './src/lib/mobile-request';
+import { useTradeWriteLock } from './src/hooks/use-trade-write-lock';
+import { APP_PAGE_URLS, TRADING_DISCLAIMER } from './src/lib/app-information';
+
 type User = { id: string; provider: string; email?: string };
 const key = 'guardian.native.session';
 const apiUrl = (process.env.EXPO_PUBLIC_API_URL ?? Constants.expoConfig?.extra?.apiUrl)?.replace(/\/$/, '');
 GoogleSignin.configure({ iosClientId: Constants.expoConfig?.extra?.googleIosClientId });
-class SessionError extends Error {}
-async function request(path: string, method = 'GET', data?: unknown, token?: string) {
-  if (token === DEMO_TOKEN) throw new Error('Demo requests must stay on this device.');
-  if (!apiUrl || !apiUrl.startsWith('https://')) throw new Error('The app server is not configured yet.');
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 15000);
-  try {
-    const response = await fetch(`${apiUrl}/api/mobile/auth/${path}`, { method, signal: controller.signal,
-      headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-      ...(data ? { body: JSON.stringify(data) } : {}) });
-    const result = await response.json();
-    if (!response.ok) {
-      if (response.status === 401) throw new SessionError(result.error);
-      throw new Error(result.error ?? 'Could not reach Guardian. Try again.');
-    }
-    return result;
-  } finally { clearTimeout(timer); }
-}
+const request = createMobileRequest(apiUrl);
 // Installation IDs describe app launches, not App Store downloads or advertising identity.
 let launchTracking: Promise<{installId:string;platform:string;version:string}|undefined> | undefined;
 function trackLaunch() {
@@ -47,7 +36,7 @@ function trackLaunch() {
     return payload;
   })().catch(()=>undefined);
 }
-type Session = { demo: boolean; token: string; user: User; request: typeof request; busy: boolean; leave: (remove?: boolean) => Promise<void>; error: string };
+type Session = { writeState: ReturnType<typeof useTradeWriteLock>['state']; acknowledgeWrite: () => Promise<void>; pendingConfirm?: ConfirmRetry; checkConfirm: () => ReturnType<typeof request>; quickTradeOff: boolean; setQuickTradeOff: (off: boolean) => void; demo: boolean; token: string; user: User; request: typeof request; busy: boolean; leave: (remove?: boolean) => Promise<void>; error: string };
 const SessionContext = createContext<Session | null>(null);
 export function useSession() { const value = useContext(SessionContext); if (!value) throw new Error('Sign in first.'); return value; }
 export default function App({ children }: { children: ReactNode }) {
@@ -62,7 +51,22 @@ export default function App({ children }: { children: ReactNode }) {
   const [password, setPassword] = useState('');
   const pending = useRef(false);
   const [demoClient] = useState(createDemoClient);
+  const [quickTradeOffFor, setQuickTradeOffFor] = useState<string | null>(null);
+  const setQuickTradeOff = useCallback((off: boolean) => setQuickTradeOffFor(off ? user?.id ?? null : null), [user?.id]);
   const demo = token === DEMO_TOKEN;
+  const { state: writeState, run: runWrite, acknowledge: acknowledgeWrite, confirm: pendingConfirm, check } = useTradeWriteLock();
+  const userId = user?.id;
+  const liveRequest = useCallback<typeof request>((path, method = 'GET', data, token) => {
+    if (!isTradeWrite(path, method)) return request(path, method, data, token);
+    const input = data as {ticketId?:string} | undefined;
+    if ((path === 'trade/confirm' || path === 'trade/quick' || path === 'close/confirm') && input?.ticketId && userId) {
+      const checkPath = path === 'close/confirm' ? 'close/check' : 'trade/check';
+      return runWrite(() => request(path, method, data, token), {path:checkPath,ticketId:input.ticketId,userId});
+    }
+    if (path === 'trade/quick') return Promise.reject(new ScreenError('Review a new one-tap order before submitting.'));
+    return runWrite(() => request(path, method, data, token));
+  }, [runWrite, userId]);
+  const checkConfirm = () => check(userId ?? '', intent => request(intent.path, 'POST', {ticketId:intent.ticketId}, token ?? undefined));
   function enterDemo(){if(loading||busy)return;demoClient.reset();setError('');setToken(DEMO_TOKEN);setUser(DEMO_USER);}
   async function hydrate() {
     try {
@@ -74,7 +78,7 @@ export default function App({ children }: { children: ReactNode }) {
       }
     } catch (e) {
       if (e instanceof SessionError) { await SecureStore.deleteItemAsync(key); setToken(null); }
-      setError(e instanceof Error ? e.message : 'Could not restore your session.');
+      setError(screenErrorMessage(e, 'Could not restore your session.'));
     } finally { setLoading(false); }
   }
   // Session hydration resolves asynchronously before updating screen state.
@@ -97,12 +101,12 @@ export default function App({ children }: { children: ReactNode }) {
         if (!isSuccessResponse(result)) return;
         idToken = result.data.idToken;
       }
-      if (!idToken) throw new Error('No sign-in token received. Please try again.');
+      if (!idToken) throw new ScreenError('Could not verify sign-in. Please try again.');
       const result = await request('login', 'POST', { provider, idToken, nonce });
       await SecureStore.setItemAsync(key, result.token);
       setToken(result.token); setUser(result.user);
     } catch (e) {
-      if ((e as { code?: string }).code !== 'ERR_REQUEST_CANCELED') setError(e instanceof Error ? e.message : 'Sign-in failed. Please try again.');
+      if ((e as { code?: string }).code !== 'ERR_REQUEST_CANCELED') setError(screenErrorMessage(e, 'Sign-in failed. Please try again.'));
     } finally { pending.current = false; setBusy(false); }
   }
   async function loginEmail() {
@@ -112,7 +116,7 @@ export default function App({ children }: { children: ReactNode }) {
       const result = await request('email-login', 'POST', { email: email.trim(), password });
       await SecureStore.setItemAsync(key, result.token);
       setPassword(''); setToken(result.token); setUser(result.user);
-    } catch (e) { setError(e instanceof Error ? e.message : 'Sign-in failed. Please try again.'); }
+    } catch (e) { setError(screenErrorMessage(e, 'Sign-in failed. Please try again.')); }
     finally { pending.current = false; setBusy(false); }
   }
   async function leave(remove = false) {
@@ -120,14 +124,18 @@ export default function App({ children }: { children: ReactNode }) {
     if (!token || pending.current) return;
     pending.current = true; setBusy(true); setError('');
     try {
-      await request(remove ? 'account' : 'logout', remove ? 'DELETE' : 'POST', undefined, token);
-      await SecureStore.deleteItemAsync(key);
-      setToken(null); setUser(null);
+      if (remove) await request('account', 'DELETE', undefined, token);
+      const logout = remove ? undefined : request('logout', 'POST', undefined, token).catch(() => undefined);
+      setToken(null); setUser(null); setPassword('');
       void GoogleSignin.signOut().catch(() => {});
-    } catch (e) { setError(e instanceof Error ? e.message : 'Please try again.'); }
+      await Promise.all([
+        SecureStore.deleteItemAsync(key).catch(() => setError('Could not remove the saved sign-in from this device.')),
+        logout,
+      ]);
+    } catch (e) { setError(screenErrorMessage(e, 'Could not delete your Guardian account. Please try again.')); }
     finally { pending.current = false; setBusy(false); }
   }
-  if (user && token && !loading) return <SessionContext.Provider value={{demo,user,token,request:demo?demoClient.request:request,busy,leave,error}}><StatusBar style="light" /><View style={{flex:1,backgroundColor:'#07120e'}}>{demo&&<SafeAreaView edges={['top']} style={{backgroundColor:'#173a2b'}}><View style={{paddingHorizontal:18,paddingVertical:8,flexDirection:'row',alignItems:'center',justifyContent:'space-between',gap:12}}><Text style={{color:'#f4f8f5',fontSize:12,flexShrink:1}}>DEMO · Sample data · No real orders</Text><Pressable accessibilityRole="button" accessibilityLabel="Exit demo" onPress={()=>void leave()} hitSlop={8} style={{padding:8}}><Text style={{color:'#2dcc98',fontWeight:'700'}}>Exit</Text></Pressable></View></SafeAreaView>}<View style={{flex:1}}>{children}</View></View></SessionContext.Provider>;
+  if (user && token && !loading) return <SessionContext.Provider value={{demo,user,token,request:demo?demoClient.request:liveRequest,writeState:demo?'ready':writeState,acknowledgeWrite,pendingConfirm,checkConfirm,quickTradeOff:quickTradeOffFor===user.id,setQuickTradeOff,busy,leave,error}}><StatusBar style="light" /><View style={{flex:1,backgroundColor:'#07120e'}}>{demo&&<SafeAreaView edges={['top']} style={{backgroundColor:'#173a2b'}}><View style={{paddingHorizontal:18,paddingVertical:8,flexDirection:'row',alignItems:'center',justifyContent:'space-between',gap:12}}><Text style={{color:'#f4f8f5',fontSize:12,flexShrink:1}}>DEMO · Sample data · No real orders</Text><Pressable accessibilityRole="button" accessibilityLabel="Exit demo" onPress={()=>void leave()} hitSlop={8} style={{padding:8}}><Text style={{color:'#2dcc98',fontWeight:'700'}}>Exit</Text></Pressable></View></SafeAreaView>}<View style={{flex:1}}>{children}</View></View></SessionContext.Provider>;
   return <View style={styles.container}>
     <LoginCandles />
     <StatusBar style="light" />
@@ -148,12 +156,20 @@ export default function App({ children }: { children: ReactNode }) {
         <TextInput accessibilityLabel="Password" placeholder="Password" placeholderTextColor="#82968b" value={password} onChangeText={setPassword} secureTextEntry autoCapitalize="none" autoCorrect={false} autoComplete="current-password" textContentType="password" maxLength={256} returnKeyType="go" onSubmitEditing={()=>void loginEmail()} style={styles.emailInput}/>
         <Pressable accessibilityRole="button" disabled={busy||!apiUrl||!email.trim()||!password} onPress={()=>void loginEmail()} style={{padding:16,borderRadius:14,alignItems:'center',backgroundColor:'#2dcc98',opacity:busy||!apiUrl||!email.trim()||!password?0.5:1}}><Text style={{color:'#07120e',fontSize:17,fontWeight:'700'}}>Sign in</Text></Pressable>
       </View>}
-      {!apiUrl && <Text style={styles.description}>Server configuration is needed before you can sign in.</Text>}
+      {!apiUrl && <Text style={styles.description}>{serverUnavailableMessage}</Text>}
     </View>}
-    {!loading&&<Pressable accessibilityRole="button" disabled={busy} onPress={enterDemo} style={{padding:16,borderRadius:14,borderWidth:1,borderColor:'#32664d',alignItems:'center',gap:6}}><Text style={{color:'#2dcc98',fontSize:17,fontWeight:'700'}}>Explore demo</Text><Text style={{color:'#a9bbb2',fontSize:12}}>Sample account · No sign-in or API key needed</Text></Pressable>}
+    {!loading&&<Pressable accessibilityRole="button" disabled={busy} onPress={enterDemo} style={{padding:16,borderRadius:14,borderWidth:1,borderColor:'#32664d',alignItems:'center',gap:6}}><Text style={{color:'#2dcc98',fontSize:17,fontWeight:'700'}}>Explore demo</Text><Text style={{color:'#a9bbb2',fontSize:12}}>Sample account · No sign-in needed</Text></Pressable>}
     {busy && <ActivityIndicator color="#2dcc98" />}
     {!!error && <Text accessibilityRole="alert" style={styles.delete}>{error}</Text>}
-    <Text style={styles.footnote}>Your login accesses your Guardian profile. Your MyFundedPerps API key is connected separately.</Text>
+    <Text style={styles.footnote}>Sign in to Guardian, then connect your MyFundedPerps account.</Text>
+    <View>
+      <Text style={styles.footnote}>{TRADING_DISCLAIMER}</Text>
+      <View style={styles.legalLinks}>
+        <Link href={APP_PAGE_URLS.privacy} style={styles.legalLink}>Privacy Policy</Link>
+        <Link href={APP_PAGE_URLS.terms} style={styles.legalLink}>Terms of Use</Link>
+        <Link href={APP_PAGE_URLS.support} style={styles.legalLink}>Support</Link>
+      </View>
+    </View>
     </ScrollView>
     </KeyboardAvoidingView>
   </View>;
@@ -175,4 +191,6 @@ const styles = StyleSheet.create({
   googleLabel: { color: '#1f1f1f', fontSize: 19, fontWeight: '500', flexShrink: 1 },
   link: { color: '#2dcc98', fontSize: 17, paddingVertical: 10 }, delete: { color: '#ff9c9c', fontSize: 15, paddingVertical: 8 },
   footnote: { color: '#82968b', fontSize: 13, lineHeight: 20 },
+  legalLinks: { flexDirection: 'row', flexWrap: 'wrap', columnGap: 16 },
+  legalLink: { color: '#2dcc98', fontSize: 13, paddingVertical: 14 },
 });

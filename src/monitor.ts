@@ -35,12 +35,14 @@ export function guardianRiskAlert(account: ChallengeAccount, band: "warning" | "
 export function startGuardianMonitor(config: Config, db: Database, telegram: Api) {
   const secrets = new SecretBox(config.ENCRYPTION_KEY);
   let running = false;
+  let stopped = false;
 
   async function run() {
-    if (running) return;
+    if (running || stopped) return;
     running = true;
     try {
       for (const { user, connection } of await db.listMonitoredUsers()) {
+        if (stopped) break;
         try {
           const client = new MfpClient(HOSTS[connection.environment], secrets.decrypt(connection.encryptedApiKey));
           const accounts = await client.listAccounts();
@@ -84,6 +86,8 @@ export function startGuardianMonitor(config: Config, db: Database, telegram: Api
           console.warn(`Guardian monitor skipped Telegram user ${user.telegramId}:`, error instanceof Error ? error.message : "unknown error");
         }
       }
+    } catch {
+      if (!stopped) console.warn("Guardian monitor could not load its users.");
     } finally {
       running = false;
     }
@@ -91,6 +95,11 @@ export function startGuardianMonitor(config: Config, db: Database, telegram: Api
 
   const timer = setInterval(() => void run(), config.GUARDIAN_MONITOR_SECONDS * 1000);
   timer.unref();
-  setTimeout(() => void run(), 10_000).unref();
-  return () => clearInterval(timer);
+  const initialRun = setTimeout(() => void run(), 10_000);
+  initialRun.unref();
+  return () => {
+    stopped = true;
+    clearInterval(timer);
+    clearTimeout(initialRun);
+  };
 }

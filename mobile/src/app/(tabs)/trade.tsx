@@ -1,34 +1,64 @@
+import { screenErrorMessage } from '../../lib/screen-error';
+import { orderResultMessage, TradeWriteUncertainError, TradeWriteValidationError } from '../../lib/trade-write';
+import { TradeWriteNotice } from '../../components/trade-write-notice';
 import { useIsFocused } from 'expo-router/react-navigation';
-import { Link, useLocalSearchParams } from 'expo-router';
+import { Link, useLocalSearchParams, useNavigation } from 'expo-router';
 import MarketChart from '../../components/market-chart';
 import { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, Keyboard, Modal, FlatList, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { useSession } from '../../../App';
 type Market={id:string;symbol:string;coin:string;provider:string;maxLeverage?:number};
-type Ticket={id:string;symbol:string;side:string;riskUsd:number;size:number;expectedPrice:number;stopLossPrice:number;takeProfitPrice:number;estimatedNotional:number;estimatedFee?:number;leverage:number;expiresAt:number;platformRules?:{warnings:string[];estimatedMargin?:number}};
+type Ticket={id:string;symbol:string;side:string;riskUsd:number;size:number;expectedPrice:number;stopLossPrice:number;takeProfitPrice:number;estimatedNotional:number;estimatedFee?:number;leverage:number;expiresAt:number;exitReplacement?:{positionId:string;orderIds:string[]};platformRules?:{warnings:string[];estimatedMargin?:number}};
+const exitReplacementMessage='If this order fills, its take profit and stop loss will replace existing exits and cover the full position.';
 const money=(v?:number)=>typeof v==='number'&&Number.isFinite(v)?new Intl.NumberFormat('en-US',{style:'currency',currency:'USD',maximumFractionDigits:v!==0&&Math.abs(v)<1?8:2}).format(v):'Unavailable';
+const stopLoss=(ticket:Ticket)=>{
+ const distance=Math.abs(ticket.stopLossPrice-ticket.expectedPrice)/ticket.expectedPrice;
+ const percent=distance.toLocaleString('en-US',{style:'percent',maximumSignificantDigits:4});
+ return `${money(ticket.stopLossPrice)} (${percent} from entry)`;
+};
+const newQuickRequestId=()=>`quick_${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}_${Math.random().toString(36).slice(2)}`;
 export default function Trade(){
- const focused=useIsFocused();
- const {request,token,demo}=useSession(),params=useLocalSearchParams<{marketId?:string}>();
+ const focused=useIsFocused(),navigation=useNavigation();
+ const {request,token,demo,writeState,quickTradeOff}=useSession(),params=useLocalSearchParams<{marketId?:string}>();
  const [markets,setMarkets]=useState<Market[]|null>(null),[marketId,setMarketId]=useState(params.marketId??(demo?'binance|BTCUSDT':'')),[search,setSearch]=useState(''),[side,setSide]=useState<'buy'|'sell'>('buy');
  const [selector,setSelector]=useState(false),[draftRisk,setDraftRisk]=useState(demo?'50':'');
  const [risk,setRisk]=useState(demo?'50':''),[chosenLeverage,setLeverage]=useState('1'),[stop,setStop]=useState('1'),[reward,setReward]=useState('2');
  const [ticket,setTicket]=useState<Ticket|null>(null),[accountName,setAccountName]=useState(''),[dryRun,setDryRun]=useState(false),[busy,setBusy]=useState(false),[error,setError]=useState(''),[result,setResult]=useState(''),[now,setNow]=useState(()=>Date.now());
- const [quickPrefs,setQuickPrefs]=useState<{quickTradeEnabled?:boolean;quickAmounts?:number[]}|null>(null),[quickUncertain,setQuickUncertain]=useState(false);
+ const [quickPrefs,setQuickPrefs]=useState<{quickTradeEnabled?:boolean;quickAmounts?:number[]}|null>(null);
+ const quickEnabled=quickPrefs?.quickTradeEnabled===true&&!quickTradeOff;
  const pending=useRef(false),[submitted,setSubmitted]=useState(false);
- useEffect(()=>{let mounted=true;request('markets','GET',undefined,token).then(result=>{if(mounted)setMarkets(result.markets);}).catch(e=>{if(mounted)setError(e.message);});return()=>{mounted=false;};},[request,token]);
+ useEffect(()=>{let mounted=true;request('markets','GET',undefined,token).then(result=>{if(mounted)setMarkets(result.markets);}).catch(e=>{if(mounted)setError(screenErrorMessage(e,'Could not load markets.'));});return()=>{mounted=false;};},[request,token]);
  useEffect(()=>{if(!ticket)return;const timer=setInterval(()=>setNow(Date.now()),1000);return()=>clearInterval(timer);},[ticket]);
  // Navigation can select another market while this tab remains mounted.
  // eslint-disable-next-line react-hooks/set-state-in-effect
  useEffect(()=>{if(params.marketId){setMarketId(params.marketId);setTicket(null);setSearch('');setError('');}},[params.marketId]);
  useEffect(()=>{if(!focused)return;let mounted=true;request('guards','GET',undefined,token).then(value=>{if(mounted)setQuickPrefs(value);}).catch(()=>{if(mounted)setQuickPrefs(null);});return()=>{mounted=false;};},[request,token,focused]);
  async function quickTrade(amount:number){
-  if(pending.current||quickUncertain||!quickPrefs?.quickTradeEnabled)return;
-  if(!marketId||![leverage,stop,reward].every(v=>v.trim()&&Number.isFinite(Number(v))&&Number(v)>0)){setError('Choose a market, leverage, stop distance and reward/risk first.');return;}
+  if(pending.current||writeState!=='ready'||!quickEnabled)return;
+  if(!market||![leverage,stop,reward].every(v=>v.trim()&&Number.isFinite(Number(v))&&Number(v)>0)){setError('Choose a market, leverage, stop distance and reward/risk first.');return;}
   pending.current=true;setBusy(true);setError('');setResult('');
-  try{const value=await request('trade/quick','POST',{marketId,side,riskUsd:amount,leverage:Number(leverage),stopPercent:Number(stop),rewardRisk:Number(reward)},token);if(value.error)throw new Error(value.error);setResult(`${value.dryRun?'Dry run validated. No order sent.':`Order submitted: ${value.status}. Check MyFundedPerps for the final fill.`}${value.warnings?.length?'\n'+value.warnings.join('\n'):''}`);}
-  catch(e){const message=e instanceof Error?e.message:'Submission response unavailable.';setError(message);if(/timeout|timed out|network|fetch|abort|Check MyFundedPerps/i.test(message))setQuickUncertain(true);}
+  const requestId=newQuickRequestId();
+  try{
+   const quote=await request('trade/quote','POST',{requestId,marketId,side,riskUsd:amount,leverage:Number(leverage),stopPercent:Number(stop),rewardRisk:Number(reward),reviewExitReplacement:true},token);
+   if(!navigation.isFocused())return;
+   const order:Ticket=quote.ticket;
+   const warnings=order.platformRules?.warnings??[];
+   const accepted=await new Promise<boolean>(resolve=>Alert.alert(
+    quote.dryRun?'Confirm practice order?':'Submit market order?',
+    [`${order.side==='buy'?'Long':'Short'} ${market.symbol} · ${market.provider}`,
+     `Size ${order.size} · ${order.leverage}x leverage · ${money(order.riskUsd)} at risk`,
+     `Take profit ${money(order.takeProfitPrice)}\nStop loss ${stopLoss(order)}`,
+     ...(quote.dryRun?['No order will be sent.']:[]),
+     ...(order.exitReplacement?[exitReplacementMessage]:[]),...warnings].join('\n'),
+    [{text:'Cancel',style:'cancel',onPress:()=>resolve(false)},{text:quote.dryRun?'Confirm':'Submit order',onPress:()=>resolve(true)}],
+    {cancelable:true,onDismiss:()=>resolve(false)},
+   ));
+   if(!accepted||!navigation.isFocused())return;
+   const value=await request('trade/quick','POST',{requestId,ticketId:order.id},token);
+   setResult(orderResultMessage(value));
+  }
+  catch(e){if(!(e instanceof TradeWriteUncertainError))setError(screenErrorMessage(e,'Could not submit trade.'));}
   finally{pending.current=false;setBusy(false);}
  }
  const market=markets?.find(m=>m.id===marketId);
@@ -36,31 +66,35 @@ export default function Trade(){
  const leverage=leverageLimit?String(Math.min(leverageLimit,Math.max(1,Number(chosenLeverage)||1))):'';
  const [leverageOpen,setLeverageOpen]=useState(false);
  async function review(){
-  if(pending.current)return;if(missing){setError(missing);return;}pending.current=true;setBusy(true);setError('');setResult('');
-  try{const value=await request('trade/quote','POST',{marketId,side,riskUsd:Number(risk),leverage:Number(leverage),stopPercent:Number(stop),rewardRisk:Number(reward)},token);setTicket(value.ticket);setAccountName(value.accountName);setDryRun(value.dryRun);setSubmitted(false);setNow(Date.now());}
-  catch(e){setError(e instanceof Error?e.message:'Could not quote trade.');}
+  if(pending.current||writeState!=='ready')return;if(missing){setError(missing);return;}pending.current=true;setBusy(true);setError('');setResult('');
+  try{const value=await request('trade/quote','POST',{marketId,side,riskUsd:Number(risk),leverage:Number(leverage),stopPercent:Number(stop),rewardRisk:Number(reward),reviewExitReplacement:true},token);setTicket(value.ticket);setAccountName(value.accountName);setDryRun(value.dryRun);setSubmitted(false);setNow(Date.now());}
+  catch(e){setError(screenErrorMessage(e,'Could not quote trade.'));}
   finally{pending.current=false;setBusy(false);}
  }
  async function confirm(){
-  if(!ticket||pending.current||submitted)return;pending.current=true;setBusy(true);setError('');setSubmitted(true);
-  try{const value=await request('trade/confirm','POST',{ticketId:ticket.id},token);if(value.error)throw new Error(value.error);setResult(value.dryRun?'Dry run validated. No order was sent.':`Order submitted. Status: ${value.status}. Check MyFundedPerps for the final fill.`);setTicket(null);}
-  catch(e){setError(e instanceof Error?e.message:'Submission could not be confirmed. Check MyFundedPerps before placing another trade.');}
+  if(!ticket||pending.current||submitted||writeState!=='ready')return;pending.current=true;setBusy(true);setError('');setSubmitted(true);
+  try{const value=await request('trade/confirm','POST',{ticketId:ticket.id},token);setResult(orderResultMessage(value));setTicket(null);}
+  catch(e){
+   if(e instanceof TradeWriteValidationError)setTicket(null);
+   if(!(e instanceof TradeWriteUncertainError))setError(screenErrorMessage(e,'Submission could not be confirmed. Check MyFundedPerps before placing another trade.'));
+  }
   finally{pending.current=false;setBusy(false);}
  }
  const missing = !market ? 'Choose a market to continue.' : !(Number(risk)>0 && Number.isFinite(Number(risk))) ? 'Choose a positive risk amount.' : !(Number(stop)>0 && Number(stop)<100 && Number.isFinite(Number(stop))) ? 'Enter a stop distance between 0 and 100%.' : !(Number(reward)>0 && Number(reward)<=100 && Number.isFinite(Number(reward))) ? 'Enter a reward/risk ratio above 0 and up to 100.' : !leverageLimit ? 'Leverage limits are unavailable for this asset. Choose another market or reload the app.' : !(Number(leverage)>=1 && Number.isFinite(Number(leverage))) ? 'Choose leverage of at least 1x.' : Number(leverage)>(market.maxLeverage??100) ? `This market supports up to ${market.maxLeverage??100}x leverage.` : '';
  const expired=!!ticket&&now>=ticket.expiresAt;
  return <SafeAreaView style={styles.page} edges={['top']}><ScrollView showsVerticalScrollIndicator={false} showsHorizontalScrollIndicator={false} keyboardShouldPersistTaps="handled" contentContainerStyle={styles.content}>
-  <Text style={styles.heading}>Trade</Text>
+  <Text style={styles.heading}>Trade</Text><TradeWriteNotice/>
   {!!result&&<Text accessibilityRole="alert" style={styles.success}>{result}</Text>}
   {ticket?<View style={styles.card}>
    <Text style={styles.heading}>{ticket.symbol} {ticket.side==='buy'?'Long':'Short'}</Text><Text style={styles.copy}>{accountName}</Text>
-   <Text style={styles.copy}>{dryRun?'Dry run only. No order will be sent.':'Confirmation sends a market order with attached TP and SL.'}</Text>
-   {([['Risk at stop',money(ticket.riskUsd)],['Size',String(ticket.size)],['Leverage',`${ticket.leverage}x`],['Estimated entry',money(ticket.expectedPrice)],['Stop loss',money(ticket.stopLossPrice)],['Take profit',money(ticket.takeProfitPrice)],['Potential profit at TP',money(Math.abs(ticket.takeProfitPrice-ticket.expectedPrice)*ticket.size)],['Estimated notional',money(ticket.estimatedNotional)],['Estimated entry fee',money(ticket.estimatedFee)],['Estimated margin + entry fee',money(ticket.platformRules?.estimatedMargin)]] as const).map(([label,value])=><View key={label} style={styles.row}><Text style={styles.copy}>{label}</Text><Text style={styles.value}>{value}</Text></View>)}
+   <Text style={styles.copy}>{dryRun?'Practice order. No order will be sent.':'Confirmation sends a market order with a take profit and stop loss.'}</Text>
+   {([['Risk at stop',money(ticket.riskUsd)],['Size',String(ticket.size)],['Leverage',`${ticket.leverage}x`],['Estimated entry',money(ticket.expectedPrice)],['Stop loss',stopLoss(ticket)],['Take profit',money(ticket.takeProfitPrice)],['Potential profit at take profit',money(Math.abs(ticket.takeProfitPrice-ticket.expectedPrice)*ticket.size)],['Estimated notional',money(ticket.estimatedNotional)],['Estimated entry fee',money(ticket.estimatedFee)],['Estimated margin + entry fee',money(ticket.platformRules?.estimatedMargin)]] as const).map(([label,value])=><View key={label} style={styles.row}><Text style={styles.copy}>{label}</Text><Text style={styles.value}>{value}</Text></View>)}
    <Text style={styles.small}>Risk at stop excludes fees and slippage. Stop execution may differ from the stop price.</Text>
+   {!!ticket.exitReplacement&&<Text style={styles.warning}>{exitReplacementMessage}</Text>}
    {ticket.platformRules?.warnings.map(w=><Text key={w} style={styles.warning}>{w}</Text>)}
-   <Text style={styles.copy}>{expired?'Quote expired. Review again.':`Quote expires in ${Math.max(0,Math.ceil((ticket.expiresAt-now)/1000))} seconds.`}</Text>
-   <Pressable accessibilityRole="button" disabled={busy||expired||submitted} style={[styles.button,(busy||expired||submitted)&&styles.disabled]} onPress={()=>Alert.alert(dryRun?'Validate dry run?':'Confirm order?',`${ticket.symbol} ${ticket.side==='buy'?'Long':'Short'} on ${accountName}`, [{text:'Cancel',style:'cancel'},{text:dryRun?'Validate':'Submit order',onPress:()=>void confirm()}])}><Text style={styles.buttonText}>{submitted?'Submission attempted':dryRun?'Validate dry run':'Confirm trade'}</Text></Pressable>
-   <Pressable accessibilityRole="button" disabled={busy} onPress={()=>{setTicket(null);setError('');}}><Text style={styles.link}>Back to trade inputs</Text></Pressable>
+   {!submitted&&<Text style={styles.copy}>{expired?'Quote expired. Review again.':`Quote expires in ${Math.max(0,Math.ceil((ticket.expiresAt-now)/1000))} seconds.`}</Text>}
+   <Pressable accessibilityRole="button" disabled={busy||expired||submitted||writeState!=='ready'} style={[styles.button,(busy||expired||submitted||writeState!=='ready')&&styles.disabled]} onPress={()=>Alert.alert(dryRun?'Confirm practice order?':'Confirm order?',[`${ticket.symbol} ${ticket.side==='buy'?'Long':'Short'} on ${accountName}`,...(dryRun?['No order will be sent.']:[]),...(ticket.exitReplacement?[exitReplacementMessage]:[])].join('\n'), [{text:'Cancel',style:'cancel'},{text:dryRun?'Confirm practice order':'Submit order',onPress:()=>void confirm()}])}><Text style={styles.buttonText}>{submitted?'Submission attempted':dryRun?'Confirm practice order':'Confirm trade'}</Text></Pressable>
+   <Pressable accessibilityRole="button" disabled={busy||writeState!=='ready'} onPress={()=>{setTicket(null);setError('');}}><Text style={styles.link}>Back to trade inputs</Text></Pressable>
   </View>:<>
    <TextInput accessibilityLabel="Search markets or venues" placeholder="Search markets or venues" placeholderTextColor="#82968b" style={styles.input} value={search} onChangeText={v=>{setSearch(v);setSelector(true);}} autoCorrect={false}/>
    {!markets&&<ActivityIndicator color="#2dcc98"/>}
@@ -77,13 +111,13 @@ export default function Trade(){
    <Modal visible={leverageOpen} transparent animationType="fade" onRequestClose={()=>setLeverageOpen(false)}><Pressable accessibilityRole="button" accessibilityLabel="Close leverage menu" style={styles.menuBackdrop} onPress={()=>setLeverageOpen(false)}><Pressable style={styles.menu} onPress={()=>{}}><View style={styles.row}><Text style={styles.copy}>{market?.symbol} leverage</Text><Pressable accessibilityRole="button" onPress={()=>setLeverageOpen(false)}><Text style={{color:'#2dcc98'}}>Done</Text></Pressable></View><FlatList data={Array.from({length:leverageLimit},(_,i)=>i+1)} keyExtractor={v=>String(v)} renderItem={({item:v})=><Pressable accessibilityRole="button" accessibilityState={{selected:Number(leverage)===v}} onPress={()=>{setLeverage(String(v));setError('');setLeverageOpen(false);}} style={[styles.menuOption,Number(leverage)===v&&styles.selected]}><Text style={styles.value}>{v}x</Text><Text style={styles.copy}>{Number(leverage)===v?'✓':''}</Text></Pressable>}/></Pressable></Pressable></Modal>
    <View style={styles.row}>{[['Estimated notional',Number(risk)>0&&Number(stop)>0?Number(risk)/(Number(stop)/100):undefined],['Estimated margin',Number(risk)>0&&Number(stop)>0&&Number(leverage)>0?Number(risk)/(Number(stop)/100)/Number(leverage):undefined]].map(([label,value])=><View key={String(label)} style={styles.estimate}><Text style={styles.small}>{label}</Text><Text style={styles.value}>{money(value as number|undefined)}</Text></View>)}</View><Text style={styles.small}>Sizing estimates exclude fees, slippage and rounding. The review uses a fresh quote.</Text>
    {!!missing&&<Text accessibilityRole="alert" style={styles.warning}>{missing}</Text>}
-   {!!error&&<Text accessibilityRole="alert" style={styles.error}>{error}</Text>}
-   <Pressable accessibilityRole="button" disabled={busy||!!missing} style={[styles.button,(busy||!!missing)&&styles.disabled]} onPress={()=>void review()}><Text style={styles.buttonText}>{busy?'Preparing review…':`Review ${side==='buy'?'Long':'Short'} trade`}</Text></Pressable><Text style={[styles.small,{textAlign:'center'}]}>Your account is checked again before quoting. Review trades require confirmation.</Text>
+   {!!error&&writeState!=='uncertain'&&<Text accessibilityRole="alert" style={styles.error}>{error}</Text>}
+   <Pressable accessibilityRole="button" disabled={busy||!!missing||writeState!=='ready'} style={[styles.button,(busy||!!missing||writeState!=='ready')&&styles.disabled]} onPress={()=>void review()}><Text style={styles.buttonText}>{busy?'Preparing review…':`Review ${side==='buy'?'Long':'Short'} trade`}</Text></Pressable><Text style={[styles.small,{textAlign:'center'}]}>Your account is checked again before quoting. Review trades require confirmation.</Text>
    </View>
-   <View style={styles.riskCard}><Text style={styles.copy}>{quickPrefs?.quickTradeEnabled?'One-tap trade · sends immediately':'Your quick risk amounts · review required'}</Text><View style={styles.row}>{(quickPrefs?.quickAmounts??[10,50,100]).map((amount,i)=><Pressable key={i} accessibilityRole="button" disabled={busy||quickUncertain} style={styles.preset} onPress={()=>quickPrefs?.quickTradeEnabled?void quickTrade(amount):(setRisk(String(amount)),setDraftRisk(String(amount)))}><Text style={styles.value}>${amount}</Text></Pressable>)}</View><Link href="/settings" style={styles.link}>Edit quick trade settings</Link>{quickPrefs?.quickTradeEnabled&&<Text style={styles.warning}>Uses {side==='buy'?'Long':'Short'} · {leverage||'choose'}x · stop {stop||'choose'}% · reward/risk {reward||'choose'}. Tap sends immediately.</Text>}{quickUncertain&&<Pressable accessibilityRole="button" onPress={()=>Alert.alert('Check your orders first','Only continue after confirming the previous attempt in MyFundedPerps or Activity.',[{text:'Cancel',style:'cancel'},{text:'I checked my orders',onPress:()=>setQuickUncertain(false)}])}><Text style={styles.link}>Check previous order before another quick trade</Text></Pressable>}</View>
+   <View style={styles.riskCard}><Text style={styles.copy}>{quickEnabled?'One-tap trade · confirmation required':'Your quick risk amounts · review required'}</Text><View style={styles.row}>{(quickPrefs?.quickAmounts??[10,50,100]).map((amount,i)=><Pressable key={i} accessibilityRole="button" disabled={busy||writeState!=='ready'} style={styles.preset} onPress={()=>quickEnabled?void quickTrade(amount):(setRisk(String(amount)),setDraftRisk(String(amount)))}><Text style={styles.value}>${amount}</Text></Pressable>)}</View><Link href="/settings" style={styles.link}>Edit quick trade settings</Link></View>
 
   </>}
-  {busy&&<ActivityIndicator color="#2dcc98"/>}{!!error&&!!ticket&&<Text accessibilityRole="alert" style={styles.error}>{error}</Text>}
+  {busy&&<ActivityIndicator color="#2dcc98"/>}{!!error&&writeState!=='uncertain'&&!!ticket&&<Text accessibilityRole="alert" style={styles.error}>{error}</Text>}
  </ScrollView></SafeAreaView>;
 }
 const styles=StyleSheet.create({page:{flex:1,backgroundColor:'#07120e'},content:{padding:20,gap:16,paddingBottom:32},segment:{flexDirection:'row',gap:6,padding:6,borderWidth:1,borderColor:'#284237',borderRadius:20},activeDirection:{backgroundColor:'#2dcc98',borderColor:'#2dcc98'},directionText:{fontSize:21,fontWeight:'700',color:'#82968b'},riskCard:{backgroundColor:'#0b1912',padding:18,borderRadius:22,borderWidth:1,borderColor:'#284237',gap:12},preset:{flex:1,paddingVertical:16,borderRadius:14,borderWidth:1,borderColor:'#284237',alignItems:'center'},custom:{flexDirection:'row',alignItems:'stretch',minHeight:52,borderWidth:1,borderColor:'#284237',borderRadius:14,overflow:'hidden',backgroundColor:'#12261c'},customInput:{flex:1,minWidth:0,paddingHorizontal:15,paddingVertical:14,color:'#f4f8f5',fontSize:18,backgroundColor:'transparent'},apply:{paddingHorizontal:12,justifyContent:'center',alignItems:'center',backgroundColor:'#193125',borderLeftWidth:1,borderLeftColor:'#284237'},parameter:{flex:1,minWidth:0,padding:12,borderRadius:14,backgroundColor:'#12261c',gap:4},parameterInput:{fontSize:22,fontWeight:'700',color:'#f4f8f5',paddingVertical:8},estimate:{flex:1,minWidth:0,padding:14,borderRadius:14,borderWidth:1,borderColor:'#284237',gap:14},menuBackdrop:{flex:1,backgroundColor:'#0008',justifyContent:'center',padding:28},menu:{maxHeight:'65%',backgroundColor:'#12261c',borderRadius:22,padding:18,gap:16,borderWidth:1,borderColor:'#284237'},menuOption:{flexDirection:'row',justifyContent:'space-between',padding:16,borderRadius:12,borderWidth:1,borderColor:'transparent'},heading:{color:'#f4f8f5',fontSize:28,fontWeight:'700'},copy:{color:'#a9bbb2',fontSize:15,lineHeight:23},value:{color:'#f4f8f5',fontSize:15,fontWeight:'600',flexShrink:1,textAlign:'right'},small:{color:'#82968b',fontSize:12,lineHeight:19},warning:{color:'#ecae68',fontSize:14,lineHeight:21},error:{color:'#ff9c9c',fontSize:15,lineHeight:22},success:{color:'#71e6b8',fontSize:16,lineHeight:24},input:{padding:15,borderRadius:12,backgroundColor:'#12261c',color:'#f4f8f5',fontSize:16},row:{flexDirection:'row',justifyContent:'space-between',gap:14},field:{gap:8},market:{padding:12,borderWidth:1,borderColor:'#284237',borderRadius:10,flexDirection:'row',justifyContent:'space-between'},selected:{borderColor:'#2dcc98',backgroundColor:'#12392a'},direction:{flex:1,padding:18,borderWidth:1,borderColor:'#284237',borderRadius:12,alignItems:'center'},card:{backgroundColor:'#12261c',padding:18,borderRadius:16,gap:16},button:{backgroundColor:'#2dcc98',padding:17,borderRadius:12,alignItems:'center'},buttonText:{color:'#07120e',fontSize:17,fontWeight:'700'},disabled:{opacity:0.4},link:{color:'#2dcc98',paddingVertical:12}});

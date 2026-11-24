@@ -23,6 +23,12 @@ Enable Sign-in required. Put the review email and password in the username and p
 
 The account belongs to the developer and is provided for testing. Trading actions affect the competition account. State explicitly which actions the reviewer may perform. No API key is bundled in the app. Keep the review credentials and key valid throughout review and subsequent review cycles. Do not include them in What to Test or public metadata.
 
+## Public app information
+
+- [Privacy Policy](https://fundedguardian.xyz/privacy)
+- [Terms of Use](https://fundedguardian.xyz/terms)
+- [Support URL](https://fundedguardian.xyz/support)
+
 ## Release
 
 Deploy and activate the server first, verify valid and invalid credentials against the live endpoint, then build iOS from the commit containing email login. Verify the exact installed build and full API-key setup before submitting. Keep Apple/Google login and the secondary email option in the shipped app; deleting it is unnecessary. Future reviewers must retain working access even if this account is rotated or disabled between reviews.

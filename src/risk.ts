@@ -106,7 +106,9 @@ export function accountRuleProgress(account: ChallengeAccount, policy?: TradingP
   };
   const profitTargetPct = finite(requirement.profit_target_pct);
   const profitTargetAmount = amountFromPercent(profitTargetPct);
-  const remainingProfit = funded ? undefined : finite(risk.remaining_profit);
+  const remainingProfit = funded ? undefined : finite(
+    risk.remaining_profit_equity === undefined ? risk.remaining_profit : risk.remaining_profit_equity,
+  );
   const achievedAmount = profitTargetAmount !== undefined && remainingProfit !== undefined
     ? clamp(profitTargetAmount - remainingProfit, 0, profitTargetAmount)
     : undefined;
@@ -125,6 +127,36 @@ export function accountRuleProgress(account: ChallengeAccount, policy?: TradingP
   };
 }
 
+export function tradingPolicyProblems(policy: TradingPolicy, market?: Market): string[] {
+  const problems: string[] = [];
+  if (policy.payout_pending) problems.push("Trading is paused while your payout is pending.");
+  if (policy.copy_follower_locked || policy.copy_scope_blocked) problems.push("Your copy trading setup blocks this trade.");
+  if (policy.manual_trading_blocked && !problems.length) problems.push("This account is blocked from placing trades manually.");
+  if (policy.restriction?.restriction === "reduce_only") problems.push("This account can only reduce or close existing positions.");
+  if (policy.opening_exposure_restricted) problems.push("This account cannot open or increase positions right now.");
+  if (policy.competition?.opening_exposure_restricted) problems.push("Your competition account cannot open or increase positions right now.");
+  if (policy.trading_halt?.platform) problems.push("MyFundedPerps has paused opening and increasing positions.");
+  if (market) {
+    const normalize = (value: string) => value.trim().toLowerCase().replace(/\s*\|\s*/g, "|");
+    const allowlist = policy.competition?.market_allowlist;
+    const marketId = market.market_id ?? market.id;
+    const identifiers = [marketId, market.symbol, market.coin ?? marketId.split("|").at(-1)]
+      .filter((value): value is string => !!value).map(normalize);
+    if (allowlist?.length && !allowlist.some(entry => identifiers.includes(normalize(entry)))) {
+      problems.push("This market is not available in your competition.");
+    }
+    const halted = policy.trading_halt?.categories;
+    if (halted?.length) {
+      const category = market.category?.trim();
+      if (!category) problems.push("MyFundedPerps has paused trading in some markets. We don't have enough information to tell if this market is affected.");
+      else if (halted.some(entry => normalize(entry) === normalize(category))) {
+        problems.push("MyFundedPerps has paused opening and increasing positions in this market.");
+      }
+    }
+  }
+  return problems;
+}
+
 export function guardAccount(
   account: ChallengeAccount,
   policy: TradingPolicy,
@@ -139,12 +171,7 @@ export function guardAccount(
     problems.push(`Account status is ${account.status}.`);
   }
   if (risk.marks_complete === false) problems.push("Fresh marks are incomplete.");
-  if (policy.manual_trading_blocked) problems.push("Trading is blocked by account policy.");
-  if (policy.opening_exposure_restricted) problems.push("Opening exposure is restricted.");
-  if (policy.payout_pending) problems.push("A payout lock is active.");
-  if (policy.copy_follower_locked || policy.copy_scope_blocked) problems.push("Copy-trading policy blocks this order.");
-  if (policy.trading_halt?.platform) problems.push("The platform is under a trading halt.");
-  if (policy.restriction?.restriction === "reduce_only") problems.push("Account is reduce-only.");
+  problems.push(...tradingPolicyProblems(policy));
   if (enforceUserLimits && requestedRisk > maxRisk) problems.push(`Requested risk $${requestedRisk} exceeds your $${maxRisk} cap.`);
 
   const allowed = riskAllowance(account, maxRisk, maxLossRoomUsagePercent);
@@ -195,8 +222,10 @@ export function platformRuleCheck(input: {
   const estimatedMargin = ticket.leverage > 0
     ? ticket.estimatedNotional / ticket.leverage + (ticket.estimatedFee ?? 0)
     : undefined;
-  const problems: string[] = [];
-  const warnings = guardAccount(account, policy, ticket.riskUsd, Number.POSITIVE_INFINITY, 100, false);
+  const problems = tradingPolicyProblems(policy, market);
+  const marketProblem = marketOrderProblem(market, ticket.size, ticket.estimatedNotional);
+  if (marketProblem) problems.push(marketProblem);
+  const warnings = guardAccount(account, {}, ticket.riskUsd, Number.POSITIVE_INFINITY, 100, false);
   const notes: string[] = [];
 
   if (maxPositionNotional !== undefined && ticket.estimatedNotional > maxPositionNotional) {
@@ -236,17 +265,59 @@ export function platformRuleCheck(input: {
   };
 }
 
+export class RiskSizingError extends Error {}
+
+export function marketAllowsOpening(market: Market): boolean {
+  return market.reduce_only !== true && (market.trading_enabled ?? market.available !== false);
+}
+
+export function roundMarketSize(size: number, market?: Market): number | undefined {
+  const precision = market?.size_decimals ?? market?.size_precision ?? market?.quantity_precision;
+  const step = market?.size_step ?? (precision === undefined ? undefined : 10 ** -precision);
+  if (step === undefined || !Number.isFinite(step) || step <= 0 || !Number.isFinite(size) || size < 0) return;
+
+  // Work in whole step units, preserving decimal sizes such as 0.3 for a 0.1 step.
+  const [mantissa, exponent = "0"] = step.toString().split("e");
+  const decimals = Math.max(0, (mantissa!.split(".")[1]?.length ?? 0) - Number(exponent));
+  const factor = 10 ** decimals;
+  const unitsPerStep = Math.round(step * factor);
+  const steps = Math.floor(size * factor / unitsPerStep);
+  if (!Number.isSafeInteger((steps + 1) * unitsPerStep)) return;
+  const next = (steps + 1) * unitsPerStep / factor;
+  if (next <= size) return next;
+  const rounded = steps * unitsPerStep / factor;
+  return rounded <= size ? rounded : (steps - 1) * unitsPerStep / factor;
+}
+
+export function marketOrderProblem(market: Market, size: number, notional?: number): string | undefined {
+  if (!marketAllowsOpening(market)) return "This market is closed to new orders.";
+  if (size <= 0 || (market.min_size !== undefined && size < market.min_size)) {
+    return market.min_size === undefined
+      ? "The order is too small for this market."
+      : `This market requires an order size of at least ${market.min_size}. Increase your risk amount or choose another market.`;
+  }
+  const rounded = roundMarketSize(size, market);
+  if (rounded === undefined) return "We could not check the allowed order size for this market.";
+  if (rounded !== size) return "The allowed order size changed. Review a new quote.";
+  if (notional !== undefined && !Number.isFinite(notional)) return "A valid order value is unavailable.";
+  if (notional !== undefined && market.min_notional !== undefined && notional < market.min_notional) {
+    return `This market requires an order worth at least $${market.min_notional}. Increase your risk amount or choose another market.`;
+  }
+}
+
 export function calculateSize(
   riskUsd: number,
   entryPrice: number,
   stopPercent: number,
-  precision: number,
+  market: Market,
 ): number {
   const stopDistance = entryPrice * (stopPercent / 100);
-  if (stopDistance <= 0) throw new Error("Stop distance must be positive.");
-  const rawSize = riskUsd / stopDistance;
-  const factor = 10 ** precision;
-  return Math.floor(rawSize * factor) / factor;
+  if (!Number.isFinite(stopDistance) || stopDistance <= 0) throw new RiskSizingError("A valid market price is unavailable.");
+  const size = roundMarketSize(riskUsd / stopDistance, market);
+  if (size === undefined) throw new RiskSizingError("We could not check the allowed order size for this market.");
+  const problem = marketOrderProblem(market, size);
+  if (problem) throw new RiskSizingError(problem);
+  return size;
 }
 
 export function buildTicket(input: {
@@ -258,17 +329,31 @@ export function buildTicket(input: {
   side: Side;
   riskUsd: number;
   quote: Quote;
+  size?: number;
   stopPercent: number;
   rewardRisk: number;
   leverage: number;
   ttlSeconds: number;
 }): TradeTicket {
   const entry = input.quote.estimated_fill_price ?? input.quote.mid;
-  const precision = input.market.size_precision ?? input.market.quantity_precision ?? 6;
-  const size = calculateSize(input.riskUsd, entry, input.stopPercent, precision);
-  if (size <= 0) throw new Error("Calculated size is below the market minimum precision.");
-  const stopDistance = entry * (input.stopPercent / 100);
+  if (!Number.isFinite(entry) || entry <= 0) throw new RiskSizingError("A valid market price is unavailable.");
+  const size = input.size ?? calculateSize(input.riskUsd, entry, input.stopPercent, input.market);
+  const estimatedNotional = input.quote.estimated_notional ?? size * entry;
+  const problem = marketOrderProblem(input.market, size, estimatedNotional);
+  if (problem) throw new RiskSizingError(problem);
+  const requestedStopDistance = entry * (input.stopPercent / 100);
+  const stopDistance = input.size === undefined ? requestedStopDistance : input.riskUsd / size;
+  const stopRatio = stopDistance / requestedStopDistance;
+  // Allow for floating-point noise at the 10% boundary.
+  if (Math.abs(stopRatio - 1) > 0.1 + Number.EPSILON) {
+    throw new RiskSizingError("The available order size and entry price would move your stop loss more than 10% from the distance you chose. Adjust your risk amount or stop distance and review again.");
+  }
   const direction = input.side === "buy" ? 1 : -1;
+  const stopLossPrice = entry - direction * stopDistance;
+  const takeProfitPrice = entry + direction * stopDistance * input.rewardRisk;
+  if (![stopLossPrice, takeProfitPrice].every(price => Number.isFinite(price) && price > 0)) {
+    throw new RiskSizingError("These inputs produce invalid stop loss or take profit prices.");
+  }
   return {
     id: input.id,
     userId: input.userId,
@@ -279,9 +364,9 @@ export function buildTicket(input: {
     riskUsd: input.riskUsd,
     size,
     expectedPrice: entry,
-    stopLossPrice: entry - direction * stopDistance,
-    takeProfitPrice: entry + direction * stopDistance * input.rewardRisk,
-    estimatedNotional: input.quote.estimated_notional ?? size * entry,
+    stopLossPrice,
+    takeProfitPrice,
+    estimatedNotional,
     estimatedFee: input.quote.estimated_fee,
     leverage: input.leverage,
     expiresAt: Date.now() + input.ttlSeconds * 1000,

@@ -2,14 +2,20 @@
   "expo": {
     "name": "Funded Guardian",
     "slug": "guardian",
-    "version": "1.0.2",
+    "version": "1.0.3",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "dark",
     "ios": {
       "supportsTablet": true,
       "usesAppleSignIn": true,
-      "bundleIdentifier": "com.retroservices1121.guardian"
+      "bundleIdentifier": "com.retroservices1121.guardian",
+      "infoPlist": {
+        "NSPhotoLibraryAddUsageDescription": "Funded Guardian saves your share images to your photo library when you tap Save Image."
+      },
+      "config": {
+        "usesNonExemptEncryption": false
+      }
     },
     "android": {
       "adaptiveIcon": {

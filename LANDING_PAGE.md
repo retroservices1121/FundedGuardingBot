@@ -2,6 +2,8 @@
 
 The existing bot service serves the public landing page at `/`. Telegram stays at `/app`, and mobile API routes stay unchanged. The existing Dockerfile includes `public`, so no separate Railway service or build command is needed.
 
+The landing page footer links to [Privacy](https://fundedguardian.xyz/privacy), [Terms](https://fundedguardian.xyz/terms), [Support](https://fundedguardian.xyz/support), and [X](https://x.com/FundedGuardian). Edit the legal pages in `public/legal/`.
+
 Optional Railway variables:
 
 - `GUARDIAN_TESTFLIGHT_URL`: Guardian's approved public link, in the form `https://testflight.apple.com/join/XXXXXXXX`. Until set, successful signups show a waiting-list message. Do not use another app's link.
@@ -16,11 +18,11 @@ SELECT email, marketing_consent, consent_version, created_at, updated_at
 FROM landing_beta_signups ORDER BY created_at DESC;
 ```
 
-Only use rows with `marketing_consent = TRUE` for marketing. Handle deletion or consent-withdrawal requests received through the listed Telegram support contact. There is no public email-list endpoint.
+Only use rows with `marketing_consent = TRUE` for marketing. Handle deletion or consent-withdrawal requests sent through the signup form’s [DM us on X @FundedGuardian](https://x.com/FundedGuardian) link. There is no public email-list endpoint.
 
 To delete a requested email, use a parameterized query through your private database client:
 `DELETE FROM landing_beta_signups WHERE email = $1`.
 
-Connect a future custom domain to this same Railway service. Keep `MINI_APP_URL` pointing to `/app` for the Telegram mini app.
+The fundedguardian.xyz domain uses this Railway service. Keep `MINI_APP_URL` pointing to `/app` for the Telegram mini app.
 
 Screenshots are the original app captures, extracted losslessly from the approved mockup. Website JavaScript and image assets are served separately with a restrictive Content Security Policy.

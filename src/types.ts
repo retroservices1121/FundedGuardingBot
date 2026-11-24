@@ -12,6 +12,7 @@ export interface RiskSnapshot {
   max_drawdown_room?: number | null;
   max_loss_room?: number | null;
   remaining_profit?: number | null;
+  remaining_profit_equity?: number | null;
   remaining_profit_target?: number | null;
   requirements?: {
     daily_loss_pct?: number | null;
@@ -40,7 +41,15 @@ export interface Market {
   id: string;
   market_id?: string;
   symbol?: string;
+  coin?: string;
+  category?: string;
   available?: boolean;
+  trading_enabled?: boolean;
+  reduce_only?: boolean;
+  size_step?: number;
+  size_decimals?: number;
+  min_size?: number;
+  min_notional?: number;
   size_precision?: number;
   quantity_precision?: number;
   [key: string]: unknown;
@@ -116,6 +125,7 @@ export interface TradingPolicy {
   copy_follower_locked?: boolean;
   copy_scope_blocked?: boolean;
   trading_halt?: { platform?: boolean; categories?: string[] };
+  competition?: { opening_exposure_restricted?: boolean; market_allowlist?: string[] } | null;
   restriction?: { restriction?: string; reason?: string } | null;
   account_rules?: unknown;
   limits?: {
@@ -162,5 +172,6 @@ export interface TradeTicket {
   leverage: number;
   guardianWarning?: string;
   platformRules?: PlatformRuleCheck;
+  exitReplacement?: { positionId: string; orderIds: string[] };
   expiresAt: number;
 }

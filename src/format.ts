@@ -1,6 +1,6 @@
 import { InlineKeyboard } from "grammy";
 import type { ChallengeAccount, Position, PositionView, TradeTicket } from "./types.js";
-import { accountRisk } from "./risk.js";
+import { accountRisk, accountRuleProgress } from "./risk.js";
 
 export const money = (value: unknown) =>
   typeof value === "number" && Number.isFinite(value)
@@ -22,7 +22,7 @@ export function accountMessage(account: ChallengeAccount, environment: string, d
     "",
     `Daily loss room: ${money(risk.daily_loss_room)}`,
     `Max loss room: ${money(risk.max_loss_room)}`,
-    `Profit target remaining: ${money(risk.remaining_profit_target)}`,
+    `Remaining to pass: ${money(accountRuleProgress(account).profit.remaining)}`,
   ].join("\n");
 }
 
@@ -42,13 +42,15 @@ export function tradeKeyboard() {
 
 export function ticketMessage(ticket: TradeTicket, dryRun: boolean) {
   const direction = ticket.side === "buy" ? "LONG" : "SHORT";
+  const stopPercent = (Math.abs(ticket.stopLossPrice - ticket.expectedPrice) / ticket.expectedPrice)
+    .toLocaleString("en-US", { style: "percent", maximumSignificantDigits: 4 });
   return [
     `${dryRun ? "🧪" : "⚠️"} Confirm ${ticket.symbol} ${direction}`,
     "",
     `Risk at stop: ${money(ticket.riskUsd)}`,
     `Size: ${ticket.size}`,
     `Estimated entry: ${money(ticket.expectedPrice)}`,
-    `Stop loss: ${money(ticket.stopLossPrice)}`,
+    `Stop loss: ${money(ticket.stopLossPrice)} (${stopPercent} from entry)`,
     `Take profit: ${money(ticket.takeProfitPrice)}`,
     `Estimated notional: ${money(ticket.estimatedNotional)}`,
     `Estimated entry fee: ${money(ticket.estimatedFee)}`,

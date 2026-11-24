@@ -1,11 +1,14 @@
-import { MobileAnalytics } from "./mobile-analytics.js";
+import { adminAuthorized, MobileAnalytics } from "./mobile-analytics.js";
 import { createLandingApi } from "./landing.js";
 import { MobileRequestLimiter } from "./mobile-request-limiter.js";
 import {MobilePush} from './mobile-push.js';
 import { parseGuards } from "./mobile-guards.js";
-import { MobileActivity } from "./mobile-activity.js";
+import { closeSize, MobileActivity } from "./mobile-activity.js";
 import { MobileTrading } from "./mobile-trading.js";
 import { MobileAuth } from "./mobile-auth.js";
+import { MobileSessionError, MobileValidationError, MobileWriteUncertainError } from "./mobile-errors.js";
+import { withinMobileWriteDeadline } from "./mobile-write-deadline.js";
+import { restartMessage } from "./restart-message.js";
 import { randomUUID } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { readFile } from "node:fs/promises";
@@ -13,9 +16,9 @@ import path from "node:path";
 import type { Config } from "./config.js";
 import { SecretBox } from "./crypto.js";
 import { Database } from "./db.js";
-import { isActiveAccount, isPassedAccount, MfpClient, MfpError } from "./mfp.js";
+import { isActiveAccount, isPassedAccount, MfpClient, MfpError, MfpTransportError, mfpRejectionMessage } from "./mfp.js";
 import { accountDailyPnl, automaticLockReason } from "./guardian.js";
-import { accountRisk, accountRuleProgress, buildTicket, calculateSize, guardAccount, platformRuleCheck, resolveAccountRequirements, riskAllowance } from "./risk.js";
+import { accountRisk, accountRuleProgress, buildTicket, calculateSize, guardAccount, marketAllowsOpening, marketOrderProblem, platformRuleCheck, resolveAccountRequirements, riskAllowance, RiskSizingError, tradingPolicyProblems } from "./risk.js";
 import { createClosedPositionShareCard } from "./share-card.js";
 import { createPassedAccountCard } from "./passed-card.js";
 import { validateTelegramInitData, type TelegramMiniAppUser } from "./telegram-auth.js";
@@ -36,7 +39,11 @@ function json(response: ServerResponse, status: number, body: unknown) {
 }
 
 function errorMessage(error: unknown) {
-  if (error instanceof MfpError) return `MyFundedPerps: ${error.message}`;
+  if (error instanceof MfpError) {
+    return error.status >= 400 && error.status < 500
+      ? mfpRejectionMessage(error)
+      : "MyFundedPerps could not complete the request.";
+  }
   return error instanceof Error ? error.message : "Unexpected error.";
 }
 
@@ -46,11 +53,57 @@ async function body(request: IncomingMessage) {
   for await (const chunk of request) {
     const buffer = Buffer.from(chunk);
     size += buffer.length;
-    if (size > 32_768) throw new Error("Request is too large.");
+    if (size > 32_768) throw new MobileValidationError("Request is too large.");
     chunks.push(buffer);
   }
   if (!chunks.length) return {} as Record<string, unknown>;
   return JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>;
+}
+
+async function mobileBody(request: IncomingMessage) {
+  try {
+    const input = await body(request);
+    if (!input || typeof input !== "object" || Array.isArray(input)) throw new MobileValidationError("Enter valid request details.");
+    return input;
+  } catch (error) {
+    if (error instanceof SyntaxError) throw new MobileValidationError("Enter valid request details.");
+    throw error;
+  }
+}
+
+function mobileTicketId(input: Record<string, unknown>, message: string) {
+  if (typeof input.ticketId !== "string" || !input.ticketId.trim()) {
+    throw new MobileValidationError(message);
+  }
+  return input.ticketId;
+}
+
+async function mobileOperation(response: ServerResponse, write: boolean, run: () => Promise<unknown>, checkOnly = false) {
+  try {
+    return json(response, 200, await (write && !checkOnly ? withinMobileWriteDeadline(run) : run()));
+  } catch (error) {
+    if (error instanceof MobileSessionError) throw error;
+    if (error instanceof MobileValidationError || error instanceof RiskSizingError) {
+      return json(response, 400, { error: error.message, uncertain: false });
+    }
+    if (error instanceof MfpError && [400, 401, 403, 404, 422].includes(error.status)) {
+      return json(response, 400, {
+        error: mfpRejectionMessage(error),
+        uncertain: false,
+      });
+    }
+    let status = 500;
+    if (error instanceof MfpTransportError) status = error.timedOut ? 504 : 502;
+    if (error instanceof MfpError) {
+      status = error.status === 408 || error.status === 504 ? 504 : [429, 503].includes(error.status) ? 503 : 502;
+    }
+    if (error instanceof MobileWriteUncertainError) status = 503;
+    if (write || error instanceof MobileWriteUncertainError) return json(response, status, {
+      error: "The result is unknown. Check MyFundedPerps before trying again.",
+      uncertain: true,
+    });
+    return json(response, status, { error: "Could not complete the request. Please try again." });
+  }
 }
 
 function marketSymbol(market: Market) {
@@ -65,17 +118,33 @@ function marketProvider(market: Market) {
   return String(market.provider ?? market.id.split("|")[0] ?? "binance");
 }
 
+function isTradingWrite(method: string | undefined, pathname: string) {
+  if (method === "PUT") return /^\/api\/positions\/[^/]+\/protection$/.test(pathname);
+  return method === "POST" && (
+    pathname === "/api/trade/confirm" ||
+    /^\/api\/(?:positions\/[^/]+\/close|orders\/[^/]+\/cancel)$/.test(pathname) ||
+    /^\/api\/mobile\/auth\/(?:trade\/(?:confirm|quick)|close\/confirm|protection\/confirm)$/.test(pathname)
+  );
+}
+
 export function startMiniAppServer(config: Config, db: Database) {
   const mobileAnalytics = new MobileAnalytics(db);
   const landingApi = createLandingApi(db);
-  const mobileAuth = new MobileAuth(db);
-  const mobileActivity = new MobileActivity(mobileAuth, config);
-  const mobileTrading = new MobileTrading(mobileAuth, config);
+  const secrets = new SecretBox(config.ENCRYPTION_KEY);
+  const mobileAuth = new MobileAuth(db, secrets);
+  const shutdown = new AbortController();
+  const mobileActivity = new MobileActivity(mobileAuth, config, shutdown.signal);
+  const mobileTrading = new MobileTrading(mobileAuth, config, shutdown.signal);
   const mobilePush=new MobilePush(db);
-  const mobileAuthReady = mobileAuth.migrate().then(async()=>{await mobilePush.migrate();mobilePush.start();});
+  let ready = false;
+  let stopMobilePush: (() => void) | undefined;
+  const mobileAuthReady = mobileAuth.migrate().then(async () => {
+    await mobilePush.migrate();
+    ready = true;
+    if (!shutdown.signal.aborted) stopMobilePush = mobilePush.start();
+  });
   mobileAuthReady.catch(() => console.error("Mobile authentication database setup failed."));
   const mobileRequestLimiter = new MobileRequestLimiter();
-  const secrets = new SecretBox(config.ENCRYPTION_KEY);
   const publicRoot = path.join(process.cwd(), "public", "miniapp");
 
   async function authenticatedUser(request: IncomingMessage) {
@@ -145,7 +214,7 @@ export function startMiniAppServer(config: Config, db: Database) {
     });
 
     // Return metadata for every available market without a quote request per row.
-    const markets = allMarkets.filter(market => market.available !== false)
+    const markets = allMarkets.filter(marketAllowsOpening)
       .map(market => ({
         id: market.id,
         symbol: marketSymbol(market),
@@ -246,14 +315,15 @@ export function startMiniAppServer(config: Config, db: Database) {
       if (requestedRisk > state.user.maxRiskUsd) throw new Error(`Requested risk $${requestedRisk} exceeds your $${state.user.maxRiskUsd} limit.`);
       if (requestedRisk > allowance.allowedRisk) throw new Error(`Risk exceeds your configured loss-room limit of $${allowance.allowedRisk.toFixed(2)}.`);
     }
-    const market = markets.find(item => item.id === marketId && item.available !== false);
+    const market = markets.find(item => item.id === marketId);
     if (!market) throw new Error("That market is not currently available.");
+    const problems = tradingPolicyProblems(policy, market);
+    if (problems.length) throw new Error(problems.join(" "));
+    if (!marketAllowsOpening(market)) throw new Error("This market is closed to new orders.");
     const symbol = marketSymbol(market);
     const firstQuote = await state.client.getQuote(market.id);
-    const precision = market.size_precision ?? market.quantity_precision ?? 6;
-    const provisionalSize = calculateSize(requestedRisk, firstQuote.mid, state.user.stopPercent, precision);
-    const quote = await state.client.getQuote(market.id, side, provisionalSize);
-    if (quote.fillable === false) throw new Error("The calculated size is not fillable.");
+    const size = calculateSize(requestedRisk, firstQuote.mid, state.user.stopPercent, market);
+    const quote = await state.client.getQuote(market.id, side, size);
     const ticket = buildTicket({
       id: randomUUID().slice(0, 12),
       userId: state.user.telegramId,
@@ -263,11 +333,13 @@ export function startMiniAppServer(config: Config, db: Database) {
       side,
       riskUsd: requestedRisk,
       quote,
+      size,
       stopPercent: state.user.stopPercent,
       rewardRisk: state.user.rewardRisk,
       leverage: requestedLeverage,
       ttlSeconds: config.CONFIRMATION_TTL_SECONDS,
     });
+    if (quote.fillable === false) throw new Error("This order size cannot be filled right now.");
     if (state.user.guardianMode === "warn") {
       const allowance = riskAllowance(state.account, state.user.maxRiskUsd, state.user.maxLossRoomUsagePercent);
       if (requestedRisk > allowance.allowedRisk) {
@@ -392,16 +464,18 @@ export function startMiniAppServer(config: Config, db: Database) {
       if (!ticket) throw new Error("This quote expired or was already used.");
       const currentUser = await db.getUser(user.telegramId);
       if (currentUser.lockedUntil && currentUser.lockedUntil.getTime() > Date.now()) throw new Error("Trading is locked.");
-      const [freshAccount, freshPolicy, freshPositions, freshMarkets] = await Promise.all([
+      const [freshAccount, freshMarkets, policy] = await Promise.all([
         client.getAccount(ticket.accountId),
-        client.getTradingPolicy(ticket.accountId),
-        client.listOpenPositions(ticket.accountId),
         client.listMarkets(),
+        client.getTradingPolicy(ticket.accountId),
       ]);
       if (!isActiveAccount(freshAccount)) throw new Error("This challenge is no longer active for trading.");
-      const freshMarket = freshMarkets.find(item => item.id === ticket.marketId && item.available !== false);
+      const freshMarket = freshMarkets.find(item => item.id === ticket.marketId);
       if (!freshMarket) throw new Error("MyFundedPerps rule check: this market is no longer available.");
-      const freshCheck = platformRuleCheck({ account: freshAccount, policy: freshPolicy, market: freshMarket, ticket, openPositions: freshPositions });
+      const problems = tradingPolicyProblems(policy, freshMarket);
+      if (problems.length) throw new Error(problems.join(" "));
+      const marketProblem = marketOrderProblem(freshMarket, ticket.size, ticket.estimatedNotional);
+      if (marketProblem) throw new Error(marketProblem);
       if (config.DRY_RUN) {
         await db.recordTradeExecution({ ticketId: ticket.id, telegramId: user.telegramId, accountId: ticket.accountId, symbol: ticket.symbol, side: ticket.side, notionalUsd: ticket.estimatedNotional, dryRun: true, status: "validated" });
         return json(response, 200, { dryRun: true, status: "validated" });
@@ -426,23 +500,19 @@ export function startMiniAppServer(config: Config, db: Database) {
       const state = await selectedAccount(request);
       const payload = await body(request);
       const positionId = decodeURIComponent(closeMatch[1]!);
+      const percent = Number(payload.percent);
+      if (![25, 50, 75, 100].includes(percent)) throw new Error("Choose 25%, 50%, 75%, or 100%.");
       const [positions, markets] = await Promise.all([
         state.client.listOpenPositions(state.account.id),
-        state.client.listMarkets(),
+        percent === 100 ? [] : state.client.listMarkets(),
       ]);
       const position = positions.find(item => item.id === positionId);
       if (!position) throw new Error("That open position is unavailable. Refresh and try again.");
-      const percent = Number(payload.percent);
-      if (![25, 50, 75, 100].includes(percent)) throw new Error("Choose 25%, 50%, 75%, or 100%.");
       if (config.DRY_RUN) return json(response, 200, { dryRun: true, status: "validated" });
       const market = markets.find(item => item.id === position.market_id || item.market_id === position.market_id);
-      const precision = market?.size_precision ?? market?.quantity_precision ?? 8;
-      const factor = 10 ** precision;
-      const size = percent === 100 ? undefined : Math.floor(position.size * percent / 100 * factor) / factor;
-      if (size !== undefined && size <= 0) throw new Error("This partial close is below the market's minimum size. Use Close all instead.");
+      const size = closeSize(Math.abs(position.size), percent, market);
       const closeSide = position.side === "long" ? "sell" : "buy";
-      const closeSize = size ?? position.size;
-      const quote = await state.client.getQuote(position.market_id, closeSide, closeSize);
+      const quote = await state.client.getQuote(position.market_id, closeSide, size ?? position.size);
       if (quote.fillable === false) throw new Error("MyFundedPerps cannot currently fill this close size. Try again or close a smaller amount.");
       const expectedPrice = quote.estimated_fill_price ?? (closeSide === "sell" ? quote.bid : quote.ask) ?? quote.mid;
       if (!Number.isFinite(expectedPrice) || expectedPrice <= 0) throw new Error("A valid close price is not currently available. Refresh and try again.");
@@ -547,32 +617,70 @@ export function startMiniAppServer(config: Config, db: Database) {
     "/app/styles-v24.css": { file: "styles.css", type: "text/css; charset=utf-8" },
   };
 
-  const server = createServer(async (request, response) => {
-    const url = new URL(request.url ?? "/", "http://localhost");
+  async function handleRequest(request: IncomingMessage, response: ServerResponse, url: URL) {
     try {
+      const ticketsPath = "/api/admin/mobile/tickets";
+      const ticketAction = /^\/api\/admin\/mobile\/tickets\/(check|resolve)$/.exec(url.pathname)?.[1];
+      if (url.pathname === ticketsPath || ticketAction) {
+        if (!mobileAnalytics.allowRequest(request, "tickets")) return json(response, 429, { error: "Try again shortly." });
+        if (!adminAuthorized(request.headers.authorization)) return json(response, 401, { error: "Admin access required." });
+        try {
+          await mobileAuthReady;
+          if (url.pathname === ticketsPath && request.method === "GET") {
+            return json(response, 200, { tickets: await mobileAuth.listUncertainTickets() });
+          }
+          if (!ticketAction || request.method !== "POST") return json(response, 404, { error: "Not found." });
+          const input = await mobileBody(request);
+          const id = mobileTicketId(input, "Choose a ticket.");
+          const kind = input.kind;
+          const operator = typeof input.operator === "string" ? input.operator.trim() : "";
+          const note = typeof input.note === "string" ? input.note.trim() : "";
+          if (kind !== "trade" && kind !== "close") throw new MobileValidationError("Choose a trade or close ticket.");
+          if (!operator || operator.length > 150) throw new MobileValidationError("Enter your operator name (up to 150 characters).");
+          if (note.length > 2000) throw new MobileValidationError("Keep the note to 2,000 characters or fewer.");
+          if (ticketAction === "check") {
+            return json(response, 200, await mobileAuth.administerTicket(kind, id, { action: "check", operator, note }));
+          }
+          if (!note) throw new MobileValidationError("Enter a note explaining how you verified the result.");
+          const outcome = input.outcome;
+          if (outcome !== "not_submitted" && outcome !== "submitted_verified") throw new MobileValidationError("Choose a resolution.");
+          return json(response, 200, await mobileAuth.administerTicket(kind, id, {
+            action: "resolve", operator, note, outcome, confirm: input.confirm === true,
+          }));
+        } catch (error) {
+          if (error instanceof MobileValidationError) return json(response, 400, { error: error.message });
+          console.error(`Mobile ticket admin ${ticketAction ?? "list"} failed.`);
+          return json(response, 503, { error: "Could not complete the ticket request. Please refresh and check its status." });
+        }
+      }
       if (url.pathname === "/api/mobile/launch" || url.pathname === "/api/admin/mobile/stats") {
         await mobileAuthReady;
         return void await mobileAnalytics.handle(request,response,url,body);
       }
       if (url.pathname === "/admin/mobile" || url.pathname === "/admin/mobile.js") {
         const isScript=url.pathname.endsWith(".js");
-        const content=await readFile(path.join(process.cwd(),"public","admin",isScript?"mobile.js":"mobile.html"));
+        const content=await readFile(path.join(process.cwd(),"public","admin",isScript?"mobile.js":"mobile.html")).catch(() => null);
+        if (!content) return json(response, 404, { error: "Not found." });
         response.writeHead(200,{"Content-Type":isScript?"text/javascript; charset=utf-8":"text/html; charset=utf-8","Cache-Control":"no-store","X-Robots-Tag":"noindex, nofollow","Content-Security-Policy":"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'","X-Content-Type-Options":"nosniff"});
         return void response.end(content);
       }
       if (url.pathname.startsWith("/api/mobile/auth/")) {
-        await mobileAuthReady;
+        try { await mobileAuthReady; }
+        catch { return json(response, 503, { error: "Could not reach Guardian. Please try again." }); }
         let address = request.socket.remoteAddress ?? "unknown";
         if (request.headers.authorization?.startsWith("Bearer ")) {
           try { address = `mobile:${(await mobileAuth.user(request.headers.authorization.slice(7))).id}`; }
-          catch { return json(response,401,{error:"Session expired. Please sign in again."}); }
+          catch (error) {
+            if (error instanceof MobileSessionError) return json(response, 401, { error: error.message });
+            return json(response, 503, { error: "Could not reach Guardian. Please try again." });
+          }
         }
         const limit = mobileRequestLimiter.check(address, url.pathname, request.method ?? "GET");
         if (!limit.allowed) {
           response.setHeader("Retry-After", String(limit.retryAfter));
           return json(response, 429, { error: limit.error });
         }
-        const token = request.headers.authorization?.replace(/^Bearer /, "") ?? "";
+        const token = request.headers.authorization?.startsWith("Bearer ") ? request.headers.authorization.slice(7) : "";
         try {
           if (url.pathname === "/api/mobile/auth/analytics" && request.method === "POST") {
             const user=await mobileAuth.user(token);
@@ -583,14 +691,15 @@ export function startMiniAppServer(config: Config, db: Database) {
           if (url.pathname === "/api/mobile/auth/login" && request.method === "POST") {
             const input = await body(request);
             if ((input.provider !== "apple" && input.provider !== "google") || typeof input.idToken !== "string" || input.idToken.length > 16000) return json(response, 400, { error: "Invalid sign-in request." });
-            return json(response, 200, await mobileAuth.login(input.provider, input.idToken, typeof input.nonce === "string" ? input.nonce : undefined));
+            try { return json(response, 200, await mobileAuth.login(input.provider, input.idToken, typeof input.nonce === "string" ? input.nonce : undefined)); }
+            catch { return json(response, 400, { error: "Could not verify sign-in. Please try again." }); }
           }
           if (url.pathname === "/api/mobile/auth/email-login" && request.method === "POST") {
             const input = await body(request);
             if (typeof input.email !== 'string' || input.email.length > 254 || typeof input.password !== 'string' || !input.password || input.password.length > 256) return json(response,400,{error:'Enter your email and password.'});
-            try { return json(response,200,await mobileAuth.loginEmail(input.email,input.password)); }
-            catch (error) { return json(response,401,{error:error instanceof Error ? error.message : 'Could not sign in.'}); }
+            return json(response,200,await mobileAuth.loginEmail(input.email,input.password));
           }
+          if (!token) throw new MobileSessionError("Session expired. Please sign in again.");
           if (url.pathname === "/api/mobile/auth/connect" && request.method === "POST") {
             await mobileAuth.user(token);
             const input = await body(request);
@@ -610,7 +719,13 @@ export function startMiniAppServer(config: Config, db: Database) {
             const connection=await mobileAuth.connection(token);
             if(!connection)return json(response,400,{error:"Connect MyFundedPerps first."});
             if(request.method==='GET')return json(response,200,connection.personal_guards??{mode:'off'});
-            if(request.method==='POST'){const input=await body(request);const guards=parseGuards({...connection.personal_guards,...input});await mobileAuth.saveGuards(token,guards);return json(response,200,guards);}
+            if(request.method==='POST'){
+              const input=await mobileBody(request);
+              if(input.quickTradeEnabled===false&&Object.keys(input).length===1)return json(response,200,await mobileAuth.disableQuickTrade(token));
+              const guards=parseGuards({...connection.personal_guards,...input});
+              await mobileAuth.saveGuards(token,guards);
+              return json(response,200,guards);
+            }
           }
           if(url.pathname==='/api/mobile/auth/notifications'){
             const user=await mobileAuth.user(token);
@@ -622,18 +737,26 @@ export function startMiniAppServer(config: Config, db: Database) {
             await mobileAuth.user(token);
             return json(response,200,{items:await db.pulseItems(),updatedAt:new Date().toISOString()});
           }
-          if(url.pathname==='/api/mobile/auth/protection'&&request.method==='POST'){
-            const input=await body(request);if(typeof input.positionId!=='string')throw new Error('Choose an open position.');
-            return json(response,200,await mobileActivity.protection(token,input.positionId));
+          if (url.pathname === "/api/mobile/auth/protection" && request.method === "POST") {
+            return await mobileOperation(response, false, async () => {
+              const input = await mobileBody(request);
+              if (typeof input.positionId !== "string") throw new MobileValidationError("Choose an open position.");
+              return mobileActivity.protection(token, input.positionId);
+            });
           }
-          if(url.pathname==='/api/mobile/auth/share'&&request.method==='POST'){
-            const input=await body(request);if(typeof input.positionId!=='string')throw new Error('Choose a closed position.');
-            return json(response,200,await mobileActivity.share(token,input.positionId));
+          if (url.pathname === "/api/mobile/auth/share" && request.method === "POST") {
+            return await mobileOperation(response, false, async () => {
+              const input = await mobileBody(request);
+              if (typeof input.positionId !== "string") throw new MobileValidationError("Choose a closed position.");
+              return mobileActivity.share(token, input.positionId);
+            });
           }
-          if(url.pathname==='/api/mobile/auth/protection/quote'&&request.method==='POST')return json(response,200,await mobileActivity.quoteProtection(token,await body(request)));
-          if(url.pathname==='/api/mobile/auth/protection/confirm'&&request.method==='POST'){
-            const input=await body(request);if(typeof input.ticketId!=='string')throw new Error('Review an edit first.');
-            return json(response,200,await mobileActivity.confirmProtection(token,input.ticketId));
+          if (url.pathname === "/api/mobile/auth/protection/quote" && request.method === "POST") {
+            return await mobileOperation(response, false, async () => mobileActivity.quoteProtection(token, await mobileBody(request)));
+          }
+          if (url.pathname === "/api/mobile/auth/protection/confirm" && request.method === "POST") {
+            return await mobileOperation(response, true, async () =>
+              mobileActivity.confirmProtection(token, mobileTicketId(await mobileBody(request), "Review an edit first.")));
           }
           if (url.pathname === "/api/mobile/auth/activity" && request.method === "GET") {
             await mobileAuth.user(token);
@@ -641,32 +764,32 @@ export function startMiniAppServer(config: Config, db: Database) {
             catch(error) { return json(response,400,{error:errorMessage(error)}); }
           }
           if (url.pathname === "/api/mobile/auth/close/quote" && request.method === "POST") {
-            await mobileAuth.user(token);
-            try { return json(response,200,await mobileActivity.quoteClose(token,await body(request))); }
-            catch(error) { return json(response,400,{error:errorMessage(error)}); }
+            return await mobileOperation(response, false, async () => mobileActivity.quoteClose(token, await mobileBody(request)));
           }
-          if (url.pathname === "/api/mobile/auth/close/confirm" && request.method === "POST") {
-            await mobileAuth.user(token);
-            const input=await body(request);
-            try { return json(response,200,await mobileActivity.confirmClose(token,String(input.ticketId??""))); }
-            catch(error) { return json(response,400,{error:errorMessage(error)}); }
+          if (["/api/mobile/auth/close/confirm","/api/mobile/auth/close/check"].includes(url.pathname) && request.method === "POST") {
+            const checkOnly = url.pathname.endsWith("/check");
+            return await mobileOperation(response, true, async () => {
+              const input = await mobileBody(request);
+              return mobileActivity.confirmClose(token, mobileTicketId(input, "Review a close first."), checkOnly);
+            }, checkOnly);
           }
-          if(url.pathname==='/api/mobile/auth/trade/quick'&&request.method==='POST')return json(response,200,await mobileTrading.quick(token,await body(request)));
+          if (url.pathname === "/api/mobile/auth/trade/quick" && request.method === "POST") {
+            return await mobileOperation(response, true, async () => mobileTrading.quick(token, await mobileBody(request)));
+          }
           if (url.pathname === "/api/mobile/auth/trade/quote" && request.method === "POST") {
-            await mobileAuth.user(token);
-            try { return json(response,200,await mobileTrading.quote(token,await body(request))); }
-            catch(error) { return json(response,400,{error:errorMessage(error)}); }
+            return await mobileOperation(response, false, async () => mobileTrading.quote(token, await mobileBody(request)));
           }
-          if (url.pathname === "/api/mobile/auth/trade/confirm" && request.method === "POST") {
-            await mobileAuth.user(token);
-            const input = await body(request);
-            try { return json(response,200,await mobileTrading.confirm(token,String(input.ticketId??""))); }
-            catch(error) { return json(response,400,{error:errorMessage(error)}); }
+          if (["/api/mobile/auth/trade/confirm","/api/mobile/auth/trade/check"].includes(url.pathname) && request.method === "POST") {
+            const checkOnly = url.pathname.endsWith("/check");
+            return await mobileOperation(response, true, async () => {
+              const input = await mobileBody(request);
+              return mobileTrading.confirm(token, mobileTicketId(input, "Review a trade first."), checkOnly);
+            }, checkOnly);
           }
           if (url.pathname === "/api/mobile/auth/markets" && request.method === "GET") {
             await mobileAuth.user(token);
             try {
-              const markets = (await new MfpClient(HOSTS.live, "").listMarkets()).filter(market => market.available !== false)
+              const markets = (await new MfpClient(HOSTS.live, "").listMarkets()).filter(marketAllowsOpening)
                 .map(market => ({id:market.id,symbol:marketSymbol(market),coin:marketCoin(market),provider:marketProvider(market),category:market.category,maxLeverage:market.max_leverage}));
               return json(response,200,{markets});
             } catch { return json(response,502,{error:"Could not load markets. Please try again."}); }
@@ -706,15 +829,30 @@ export function startMiniAppServer(config: Config, db: Database) {
           if (url.pathname === "/api/mobile/auth/logout" && request.method === "POST") { await mobilePush.disable((await mobileAuth.user(token)).id); await mobileAuth.logout(token); return json(response, 200, { ok: true }); }
           if (url.pathname === "/api/mobile/auth/account" && request.method === "DELETE") { await mobileAuth.delete(token); return json(response, 200, { ok: true }); }
           return json(response, 404, { error: "Not found." });
-        } catch { return json(response, 401, { error: "Could not verify your session. Please sign in again." }); }
+        } catch (error) {
+          if (error instanceof MobileSessionError) return json(response, 401, { error: error.message });
+          if (error instanceof MobileValidationError) return json(response, 400, { error: error.message });
+          return json(response, 503, { error: "Could not complete the request. Please try again." });
+        }
       }
-      if (url.pathname === "/health") return json(response, 200, { ok: true });
+      if (url.pathname === "/health") {
+        const ok = ready && !shutdown.signal.aborted;
+        return json(response, ok ? 200 : 503, { ok });
+      }
       if (url.pathname.startsWith("/api/landing/")) return void await landingApi(request, response, url.pathname);
-      if ((request.method === "GET" || request.method === "HEAD") && (url.pathname === "/" || /^\/landing\/(?:landing\.js|image-[a-f0-9]{16}\.(?:png|jpg))$/.test(url.pathname))) {
-        const file = url.pathname === "/" ? "index.html" : url.pathname.slice("/landing/".length);
-        const content = await readFile(path.join(process.cwd(), "public", "landing", file));
+      const legalPage = /^\/(privacy|terms|support)(?:\.html)?$/.exec(url.pathname);
+      const legalStylesheet = url.pathname === "/legal/legal.css";
+      const landingAsset = url.pathname === "/" || /^\/landing\/(?:landing\.js|image-[a-f0-9]{16}\.(?:png|jpg))$/.test(url.pathname);
+      if ((request.method === "GET" || request.method === "HEAD") && (legalPage || legalStylesheet || landingAsset)) {
+        const directory = legalPage || legalStylesheet ? "legal" : "landing";
+        const file = legalPage ? `${legalPage[1]}.html` : legalStylesheet ? "legal.css" :
+          url.pathname === "/" ? "index.html" : url.pathname.slice("/landing/".length);
+        const content = await readFile(path.join(process.cwd(), "public", directory, file)).catch(() => null);
+        if (!content) return json(response, 404, { error: "Not found." });
         response.writeHead(200, {
-          "Content-Type": file.endsWith(".html") ? "text/html; charset=utf-8" : file.endsWith(".js") ? "text/javascript; charset=utf-8" : file.endsWith(".png") ? "image/png" : "image/jpeg",
+          "Content-Type": file.endsWith(".html") ? "text/html; charset=utf-8" :
+            legalStylesheet ? "text/css; charset=utf-8" : file.endsWith(".js") ? "text/javascript; charset=utf-8" :
+            file.endsWith(".png") ? "image/png" : "image/jpeg",
           "Cache-Control": file.startsWith("image-") ? "public, max-age=86400" : "no-cache",
           "Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self';",
           "X-Content-Type-Options": "nosniff",
@@ -723,14 +861,16 @@ export function startMiniAppServer(config: Config, db: Database) {
         return void response.end(request.method === "HEAD" ? undefined : content);
       }
       if (url.pathname === "/app/logo.png") {
-        const logo = await readFile(path.join(process.cwd(), "assets", "funded-guardian-logo.png"));
+        const logo = await readFile(path.join(process.cwd(), "assets", "funded-guardian-logo.png")).catch(() => null);
+        if (!logo) return json(response, 404, { error: "Not found." });
         response.writeHead(200, { "Content-Type": "image/png", "Cache-Control": "public, max-age=86400" });
         return void response.end(logo);
       }
       if (url.pathname.startsWith("/api/")) return void await handleApi(request, response, url.pathname);
       const asset = staticFiles[url.pathname];
       if (asset) {
-        const content = await readFile(path.join(publicRoot, asset.file));
+        const content = await readFile(path.join(publicRoot, asset.file)).catch(() => null);
+        if (!content) return json(response, 404, { error: "Not found." });
         response.writeHead(200, {
           "Content-Type": asset.type,
           "Cache-Control": "no-store, max-age=0",
@@ -742,13 +882,38 @@ export function startMiniAppServer(config: Config, db: Database) {
       }
       json(response, 404, { error: "Not found." });
     } catch (error) {
-      const status = errorMessage(error).includes("Telegram authentication") || errorMessage(error).includes("Open Funded") ? 401 : 400;
-      json(response, status, { error: errorMessage(error) });
+      const message = errorMessage(error);
+      const needsTelegramAuth = !(error instanceof MfpError)
+        && (message.includes("Telegram authentication") || message.includes("Open Funded"));
+      json(response, needsTelegramAuth ? 401 : 400, { error: message });
+    }
+  }
+
+  const activeRequests = new Set<Promise<void>>();
+  const server = createServer(async (request, response) => {
+    const url = new URL(request.url ?? "/", "http://localhost");
+    if (shutdown.signal.aborted && isTradingWrite(request.method, url.pathname)) {
+      response.setHeader("Connection", "close");
+      return json(response, 503, { error: restartMessage, uncertain: false, code: "restarting" });
+    }
+    // Track the handler itself so a disconnected client cannot end the drain early.
+    const work = handleRequest(request, response, url);
+    activeRequests.add(work);
+    try {
+      await work;
+    } finally {
+      activeRequests.delete(work);
     }
   });
 
   server.listen(config.PORT, "0.0.0.0", () => {
     console.log(`Funded Guardian Mini App listening on port ${config.PORT}.`);
   });
-  return server;
+  return Object.assign(server, {
+    beginShutdown() {
+      shutdown.abort(new MobileValidationError(restartMessage));
+      stopMobilePush?.();
+      return Promise.allSettled([mobileAuthReady, ...activeRequests]);
+    },
+  });
 }
