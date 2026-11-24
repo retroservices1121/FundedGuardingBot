@@ -1,4 +1,4 @@
-import { MobileAnalytics } from "./mobile-analytics.js";
+import { adminAuthorized, MobileAnalytics } from "./mobile-analytics.js";
 import { createLandingApi } from "./landing.js";
 import { MobileRequestLimiter } from "./mobile-request-limiter.js";
 import {MobilePush} from './mobile-push.js';
@@ -603,6 +603,38 @@ export function startMiniAppServer(config: Config, db: Database) {
   const server = createServer(async (request, response) => {
     const url = new URL(request.url ?? "/", "http://localhost");
     try {
+      const ticketsPath = "/api/admin/mobile/tickets";
+      const ticketAction = /^\/api\/admin\/mobile\/tickets\/(check|resolve)$/.exec(url.pathname)?.[1];
+      if (url.pathname === ticketsPath || ticketAction) {
+        if (!adminAuthorized(request.headers.authorization)) return json(response, 401, { error: "Admin access required." });
+        try {
+          await mobileAuthReady;
+          if (url.pathname === ticketsPath && request.method === "GET") {
+            return json(response, 200, { tickets: await mobileAuth.listUncertainTickets() });
+          }
+          if (!ticketAction || request.method !== "POST") return json(response, 404, { error: "Not found." });
+          const input = await mobileBody(request);
+          const id = mobileTicketId(input, "Choose a ticket.");
+          const kind = input.kind;
+          const operator = typeof input.operator === "string" ? input.operator.trim() : "";
+          const note = typeof input.note === "string" ? input.note.trim() : "";
+          if (kind !== "trade" && kind !== "close") throw new MobileValidationError("Choose a trade or close ticket.");
+          if (!operator || operator.length > 150) throw new MobileValidationError("Enter your operator name (up to 150 characters).");
+          if (note.length > 2000) throw new MobileValidationError("Keep the note to 2,000 characters or fewer.");
+          if (ticketAction === "check") {
+            return json(response, 200, await mobileAuth.administerTicket(kind, id, { action: "check", operator, note }));
+          }
+          if (!note) throw new MobileValidationError("Enter a note explaining how you verified the result.");
+          const outcome = input.outcome;
+          if (outcome !== "not_submitted" && outcome !== "submitted_verified") throw new MobileValidationError("Choose a resolution.");
+          return json(response, 200, await mobileAuth.administerTicket(kind, id, {
+            action: "resolve", operator, note, outcome, confirm: input.confirm === true,
+          }));
+        } catch (error) {
+          if (error instanceof MobileValidationError) return json(response, 400, { error: error.message });
+          return json(response, 503, { error: "Could not complete the ticket request. Please refresh and check its status." });
+        }
+      }
       if (url.pathname === "/api/mobile/launch" || url.pathname === "/api/admin/mobile/stats") {
         await mobileAuthReady;
         return void await mobileAnalytics.handle(request,response,url,body);

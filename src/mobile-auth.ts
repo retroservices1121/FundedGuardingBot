@@ -7,7 +7,7 @@ import { MobileSessionError, MobileValidationError, MobileWriteUncertainError } 
 import { reviewCredentials, verifyReviewPassword } from './review-login.js';
 import type { SecretBox } from './crypto.js';
 import { closeClientOrderId, MfpClient } from './mfp.js';
-import { entryClientOrderId, mobileOrderHosts, reconcileOrder } from './mobile-order.js';
+import { entryClientOrderId, mobileOrderHosts, orderLookupResult } from './mobile-order.js';
 
 export const GOOGLE_IOS_CLIENT_ID = '174585846381-7nrqvpr243ndbk91gst8mjrubhkmnbdk.apps.googleusercontent.com';
 const keys = {
@@ -23,8 +23,25 @@ export function validateIdentity(payload: JWTPayload, provider: Provider, nonce?
 const hash = (value: string) => createHash('sha256').update(value).digest('hex');
 type TicketMarket = { accountId: string; marketId: string };
 type TicketTable = 'mobile_trade_tickets' | 'mobile_close_tickets';
+const ticketTables = {trade:'mobile_trade_tickets',close:'mobile_close_tickets'} as const;
+type TicketKind = keyof typeof ticketTables;
+type TicketResolution = 'not_submitted' | 'submitted_verified';
+type TicketAdminAction = {operator: string; note?: string} &
+  ({action: 'check'} | {action: 'resolve'; outcome: TicketResolution; note: string; confirm: boolean});
+// New quotes carry this flag until a server that supports reconciliation claims them.
+// An older server can claim a quote during a rolling deploy without clearing the flag.
+const currentTicket = "COALESCE(payload->>'environment' IN ('live','sandbox') AND NOT (payload ? 'awaitingClaim'),false)";
+const closeOrderOnly = "payload->>'kind' IS DISTINCT FROM 'protection'";
+const ticketAge = 'EXTRACT(EPOCH FROM clock_timestamp() - submitted_at)::double precision';
 type MobileTradeTicket = TradeTicket & {environment?: keyof typeof mobileOrderHosts};
-type PendingTicket = {payload: TicketMarket & {environment?: keyof typeof mobileOrderHosts}; submitted_age_seconds: number};
+type PendingTicket = {
+  payload: TicketMarket & {environment: keyof typeof mobileOrderHosts};
+  identity_id: string; submitted_age_seconds: number; legacy: boolean;
+};
+type TicketLookup = {
+  lookup: 'legacy' | 'failed' | 'found' | 'absent';
+  result?: ReturnType<typeof orderLookupResult>;
+};
 type CloseTicketInput = { id: string; expiresAt: number; accountId: string; [key: string]: unknown } &
   ({ kind?: undefined; marketId: string } | { kind: 'protection' });
 export class MobileAuth {
@@ -53,16 +70,23 @@ export class MobileAuth {
         payload JSONB NOT NULL, expires_at TIMESTAMPTZ NOT NULL,
         submitted_at TIMESTAMPTZ, result JSONB
       );
+      CREATE TABLE IF NOT EXISTS mobile_ticket_admin_audit (
+        id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+        operator TEXT NOT NULL, ticket_id TEXT NOT NULL, kind TEXT NOT NULL, action TEXT NOT NULL,
+        before_result JSONB, after_result JSONB, note TEXT,
+        lookup_status TEXT NOT NULL, outcome TEXT NOT NULL, requested_outcome TEXT,
+        attempted_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
+      );
       CREATE TABLE IF NOT EXISTS mobile_schema_migrations (id TEXT PRIMARY KEY);
       WITH first_run AS (
         INSERT INTO mobile_schema_migrations VALUES ('legacy_order_ticket_results')
         ON CONFLICT DO NOTHING RETURNING id
       ), close_backfill AS (
         UPDATE mobile_close_tickets SET result='{"status":"legacy"}'::jsonb
-        WHERE submitted_at IS NOT NULL AND result IS NULL AND EXISTS (SELECT 1 FROM first_run)
+        WHERE submitted_at IS NOT NULL AND result IS NULL AND NOT ${currentTicket} AND EXISTS (SELECT 1 FROM first_run)
       )
       UPDATE mobile_trade_tickets SET result='{"status":"legacy"}'::jsonb
-      WHERE submitted_at IS NOT NULL AND result IS NULL AND EXISTS (SELECT 1 FROM first_run);
+      WHERE submitted_at IS NOT NULL AND result IS NULL AND NOT ${currentTicket} AND EXISTS (SELECT 1 FROM first_run);
       CREATE INDEX IF NOT EXISTS mobile_trade_pending_market_idx ON mobile_trade_tickets ((payload->>'accountId'), (payload->>'marketId'))
         WHERE submitted_at IS NOT NULL AND result IS NULL;
       CREATE INDEX IF NOT EXISTS mobile_close_pending_market_idx ON mobile_close_tickets ((payload->>'accountId'), (payload->>'marketId'))
@@ -207,17 +231,17 @@ export class MobileAuth {
       const pendingQuery = `
         SELECT id,identity_id,'trade' AS kind FROM mobile_trade_tickets
           WHERE payload->>'accountId'=$1 AND payload->>'marketId'=$2 AND submitted_at IS NOT NULL AND result IS NULL
-            AND id IS DISTINCT FROM $3
+            AND ${currentTicket} AND id IS DISTINCT FROM $3
         UNION ALL
         SELECT id,identity_id,'close' AS kind FROM mobile_close_tickets
           WHERE payload->>'accountId'=$1 AND payload->>'marketId'=$2 AND submitted_at IS NOT NULL AND result IS NULL
-            AND payload->>'kind' IS DISTINCT FROM 'protection' AND id IS DISTINCT FROM $3
+            AND ${currentTicket} AND ${closeOrderOnly} AND id IS DISTINCT FROM $3
         LIMIT 1`;
       const args = [accountId,marketId,sameTicket ?? null];
-      const pending = await client.query<{id: string; identity_id: string; kind: 'trade' | 'close'}>(pendingQuery,args);
+      const pending = await client.query<{id: string; identity_id: string; kind: TicketKind}>(pendingQuery,args);
       const previous = pending.rows[0];
       if (previous) {
-        const table = previous.kind === 'close' ? 'mobile_close_tickets' : 'mobile_trade_tickets';
+        const table = ticketTables[previous.kind];
         await this.reconcilePendingTicket(client,table,previous.id,previous.identity_id);
         // A concurrent writer may have finished, or another older ticket may still be pending.
         const remaining = await client.query(pendingQuery,args);
@@ -230,30 +254,93 @@ export class MobileAuth {
   }
   private async reconcilePendingTicket(client: PoolClient, table: TicketTable, id: string, identityId: string) {
     // An active sender holds this row lock until its write finishes.
-    const pending = await client.query<PendingTicket>(`SELECT payload,EXTRACT(EPOCH FROM clock_timestamp() - submitted_at)::double precision AS submitted_age_seconds FROM ${table}
-      WHERE id=$1 AND identity_id=$2 AND submitted_at IS NOT NULL AND result IS NULL FOR UPDATE SKIP LOCKED`,[id,identityId]);
-    const ticket = pending.rows[0];
-    if (!ticket || !this.secrets) return;
-    const {rows:[connection]} = await client.query(`SELECT environment,encrypted_api_key,selected_account_id FROM mobile_connections WHERE identity_id=$1`,[identityId]);
-    const host = mobileOrderHosts[connection?.environment as keyof typeof mobileOrderHosts];
-    if (!host || (ticket.payload.environment && connection.environment !== ticket.payload.environment)) return;
-    let mfp: MfpClient;
-    try { mfp = new MfpClient(host,this.secrets.decrypt(connection.encrypted_api_key)); }
-    catch { return; }
-    const clientOrderId = table === 'mobile_close_tickets' ? closeClientOrderId(id) : entryClientOrderId(id);
-    const result = await reconcileOrder(mfp,clientOrderId,ticket.payload.accountId,ticket.payload.environment ? ticket.submitted_age_seconds : undefined);
+    const kind = table === 'mobile_close_tickets' ? ` AND ${closeOrderOnly}` : '';
+    const {rows:[ticket]} = await client.query<PendingTicket>(`SELECT payload,identity_id,${ticketAge} AS submitted_age_seconds FROM ${table}
+      WHERE id=$1 AND identity_id=$2 AND submitted_at IS NOT NULL AND result IS NULL AND ${currentTicket}${kind} FOR UPDATE SKIP LOCKED`,[id,identityId]);
+    if (!ticket) return;
+    const {result} = await this.lookupTicket(client,table,id,ticket);
     if (!result) return;
-    if (result.status === 'not_submitted' && connection.selected_account_id !== ticket.payload.accountId) {
-      const account = await mfp.getAccount(ticket.payload.accountId).catch(() => undefined);
-      if (account?.id !== ticket.payload.accountId) return;
-    }
-    await client.query(`UPDATE ${table} SET result=$2 WHERE id=$1`,[id,JSON.stringify(result)]);
+    await client.query(`UPDATE ${table} SET result=$2 WHERE id=$1 AND result IS NULL`,[id,JSON.stringify(result)]);
     return result;
+  }
+  private async lookupTicket(client: PoolClient, table: TicketTable, id: string, ticket: PendingTicket): Promise<TicketLookup> {
+    if (ticket.legacy) return {lookup:'legacy'} as const;
+    if (!this.secrets) return {lookup:'failed'} as const;
+    const {rows:[connection]} = await client.query(`SELECT environment,encrypted_api_key,selected_account_id FROM mobile_connections WHERE identity_id=$1`,[ticket.identity_id]);
+    const host = mobileOrderHosts[ticket.payload.environment];
+    if (!host || connection?.environment !== ticket.payload.environment) return {lookup:'failed'} as const;
+    let apiKey: string;
+    try { apiKey = this.secrets.decrypt(connection.encrypted_api_key); }
+    catch { return {lookup:'failed'} as const; }
+    const mfp = new MfpClient(host,apiKey);
+    const clientOrderId = table === 'mobile_close_tickets' ? closeClientOrderId(id) : entryClientOrderId(id);
+    const lookup = await mfp.findOrderByClientOrderId(clientOrderId,ticket.payload.accountId).catch(() => ({status:'failed'} as const));
+    const result = orderLookupResult(lookup,ticket.submitted_age_seconds);
+    if (result?.status === 'not_submitted' && connection.selected_account_id !== ticket.payload.accountId) {
+      const account = await mfp.getAccount(ticket.payload.accountId).catch(() => undefined);
+      if (account?.id !== ticket.payload.accountId) return {lookup:'failed'} as const;
+    }
+    return {lookup:lookup.status,result};
   }
   async reconcileTicket(token: string, id: string, close = false) {
     const user = await this.user(token);
     const table = close ? 'mobile_close_tickets' : 'mobile_trade_tickets';
     return this.ticketTransaction(client => this.reconcilePendingTicket(client,table,id,user.id));
+  }
+  async listUncertainTickets() {
+    const columns = `id,identity_id AS user_id,payload->>'accountId' AS account,payload->>'marketId' AS market,
+      submitted_at,${ticketAge} AS age_seconds,NOT ${currentTicket} AS legacy`;
+    const pending = 'submitted_at IS NOT NULL AND result IS NULL';
+    const {rows} = await this.db.pool.query(`
+      SELECT ${columns},'trade' AS kind FROM mobile_trade_tickets WHERE ${pending}
+      UNION ALL
+      SELECT ${columns},'close' AS kind FROM mobile_close_tickets WHERE ${pending} AND ${closeOrderOnly}
+      ORDER BY submitted_at,id`);
+    return rows;
+  }
+  async administerTicket(kind: TicketKind, id: string, input: TicketAdminAction) {
+    const table = ticketTables[kind];
+    const scope = `id=$1 AND submitted_at IS NOT NULL${kind === 'close' ? ` AND ${closeOrderOnly}` : ''}`;
+    return this.ticketTransaction(async client => {
+      const {rows:[ticket]} = await client.query<PendingTicket>(`
+        SELECT payload,identity_id,${ticketAge} AS submitted_age_seconds,NOT ${currentTicket} AS legacy FROM ${table}
+        WHERE ${scope} AND result IS NULL FOR UPDATE SKIP LOCKED`,[id]);
+      let before: unknown = null;
+      let after: unknown = null;
+      let lookup = 'skipped';
+      let status: string;
+      if (!ticket) {
+        const {rows:[existing]} = await client.query(`SELECT result FROM ${table} WHERE ${scope}`,[id]);
+        before = after = existing?.result ?? null;
+        status = !existing ? 'missing' : before === null ? 'busy' : 'already_resolved';
+      } else {
+        const checked = await this.lookupTicket(client,table,id,ticket);
+        lookup = checked.lookup;
+        status = lookup;
+        let result: {status: string; dryRun?: boolean} | undefined;
+        if (input.action === 'check') {
+          result = checked.result;
+        } else if (lookup === 'found') {
+          status = 'found_use_check';
+        } else if (ticket.submitted_age_seconds < 60) {
+          status = 'too_recent';
+        } else if (input.confirm) {
+          result = input.outcome === 'submitted_verified' ? {status:input.outcome,dryRun:false} : {status:input.outcome};
+        } else {
+          status = 'dry_run';
+        }
+        if (result) {
+          await client.query(`UPDATE ${table} SET result=$2 WHERE id=$1 AND result IS NULL`,[id,JSON.stringify(result)]);
+          after = result;
+          status = 'resolved';
+        }
+      }
+      await client.query(`INSERT INTO mobile_ticket_admin_audit
+        (operator,ticket_id,kind,action,before_result,after_result,note,lookup_status,outcome,requested_outcome)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+      [input.operator,id,kind,input.action,before,after,input.note ?? null,lookup,status,input.action === 'resolve' ? input.outcome : null]);
+      return {status,lookup,result:status === 'resolved' ? after : null};
+    });
   }
   async withTicketWrite<T>(id: string, close: boolean, environment: string, run: (client: PoolClient) => Promise<T>) {
     const table = close ? 'mobile_close_tickets' : 'mobile_trade_tickets';
@@ -269,12 +356,12 @@ export class MobileAuth {
   }
   async saveTicket(token: string, ticket: MobileTradeTicket, reuse = false) {
     const user = await this.user(token);
-    const result = await this.withMarketTicket(ticket,client => client.query(`INSERT INTO mobile_trade_tickets (id,identity_id,payload,expires_at) VALUES ($1,$2,$3,$4)${reuse ? ' ON CONFLICT (id) DO NOTHING' : ''}`,[ticket.id,user.id,JSON.stringify(ticket),new Date(ticket.expiresAt)]),reuse ? ticket.id : undefined);
+    const result = await this.withMarketTicket(ticket,client => client.query(`INSERT INTO mobile_trade_tickets (id,identity_id,payload,expires_at) VALUES ($1,$2,$3,$4)${reuse ? ' ON CONFLICT (id) DO NOTHING' : ''}`,[ticket.id,user.id,JSON.stringify({...ticket,awaitingClaim:true}),new Date(ticket.expiresAt)]),reuse ? ticket.id : undefined);
     return result.rowCount !== 0;
   }
   private async claimMarketTicket(table: TicketTable, token: string, id: string) {
     const user = await this.user(token);
-    const kind = table === 'mobile_close_tickets' ? " AND payload->>'kind' IS DISTINCT FROM 'protection'" : '';
+    const kind = table === 'mobile_close_tickets' ? ` AND ${closeOrderOnly}` : '';
     const available = `id=$1 AND identity_id=$2 AND submitted_at IS NULL AND result IS NULL AND expires_at>statement_timestamp()${kind}`;
     const args = [id,user.id];
     const candidate = await this.db.pool.query(`SELECT payload FROM ${table} WHERE ${available}`,args);
@@ -282,7 +369,10 @@ export class MobileAuth {
     if (!payload) return;
     const result = await this.withMarketTicket(payload,async client => {
       // A same-ticket claim may win between the initial read and the lock.
-      return client.query(`UPDATE ${table} SET submitted_at=statement_timestamp() WHERE ${available} RETURNING payload`,args);
+      return client.query(`UPDATE ${table} SET submitted_at=statement_timestamp(),payload=(payload-'awaitingClaim') ||
+        COALESCE((SELECT jsonb_build_object('environment',environment) FROM mobile_connections
+          WHERE identity_id=$2 AND payload->>'environment' IS NULL),'{}'::jsonb)
+        WHERE ${available} RETURNING payload`,args);
     },id);
     return result.rows[0]?.payload;
   }
@@ -308,7 +398,8 @@ export class MobileAuth {
   async saveClose(token: string, input: CloseTicketInput) {
     const user = await this.user(token);
     const sql = 'INSERT INTO mobile_close_tickets (id,identity_id,payload,expires_at) VALUES ($1,$2,$3,$4)';
-    const args = [input.id,user.id,JSON.stringify(input),new Date(input.expiresAt)];
+    const payload = input.kind === 'protection' ? input : {...input,awaitingClaim:true};
+    const args = [input.id,user.id,JSON.stringify(payload),new Date(input.expiresAt)];
     if (input.kind === 'protection') await this.db.pool.query(sql,args);
     else await this.withMarketTicket(input,client => client.query(sql,args));
   }

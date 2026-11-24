@@ -18,6 +18,7 @@ const config = loadConfig({
   ENCRYPTION_KEY:Buffer.alloc(32,1).toString('base64'), ALLOW_LIVE_TRADING:'true', DRY_RUN:'false',
 });
 const apiFetch = globalThis.fetch;
+const adminToken = 'test-admin-token-'.repeat(3);
 const position: Position = {
   id:'position', account_id:'account', size:2, market_id:'binance|BTCUSDT',
   provider:'binance', symbol:'BTCUSDT', coin:'BTC', side:'long', entry_price:100,
@@ -67,7 +68,7 @@ beforeEach(() => {
   vi.spyOn(MfpClient.prototype,'getQuote').mockResolvedValue({mid:100,bid:99,ask:101});
 });
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); });
 afterAll(() => new Promise<void>((resolve,reject) => {
   server.close(error => error ? reject(error) : resolve());
 }));
@@ -91,6 +92,63 @@ function telegramPost(path: string, data: unknown) {
     method:'POST',headers:{'Content-Type':'application/json',Authorization:`tma ${init}`},body:JSON.stringify(data),
   });
 }
+
+describe('mobile admin ticket routes', () => {
+  const path = '/api/admin/mobile/tickets';
+  const resolution = {ticketId:'ticket',kind:'close',operator:'Support',outcome:'submitted_verified',note:'Verified the close.'};
+  function call(route: string, token?: string, input?: unknown) {
+    return apiFetch(new URL(route,base),{
+      method:input ? 'POST' : 'GET',
+      headers:{'Content-Type':'application/json',...(token ? {Authorization:'Bearer '+token} : {})},
+      body:input ? JSON.stringify(input) : undefined,
+    });
+  }
+
+  it('requires the existing admin token on all three endpoints', async () => {
+    vi.stubEnv('GUARDIAN_ADMIN_TOKEN',adminToken);
+    const list = vi.spyOn(MobileAuth.prototype,'listUncertainTickets');
+    const action = vi.spyOn(MobileAuth.prototype,'administerTicket');
+    expect((await call(path)).status).toBe(401);
+    expect((await call(path+'/check','mobile-session',resolution)).status).toBe(401);
+    expect((await call(path+'/resolve',undefined,resolution)).status).toBe(401);
+    expect(list).not.toHaveBeenCalled();
+    expect(action).not.toHaveBeenCalled();
+    vi.stubEnv('GUARDIAN_ADMIN_TOKEN','');
+    expect((await call(path,adminToken)).status).toBe(401);
+  });
+
+  it('requires identity, note and an explicit outcome, and confirms only with boolean true', async () => {
+    vi.stubEnv('GUARDIAN_ADMIN_TOKEN',adminToken);
+    const action = vi.spyOn(MobileAuth.prototype,'administerTicket').mockResolvedValue({status:'dry_run',lookup:'failed',result:null});
+    expect((await call(path+'/resolve',adminToken,{...resolution,operator:' '})).status).toBe(400);
+    expect((await call(path+'/resolve',adminToken,{...resolution,note:' '})).status).toBe(400);
+    expect((await call(path+'/resolve',adminToken,{...resolution,outcome:undefined})).status).toBe(400);
+    expect(action).not.toHaveBeenCalled();
+    for (const confirm of [undefined,'true',true]) {
+      expect((await call(path+'/resolve',adminToken,{...resolution,confirm})).status).toBe(200);
+      expect(action).toHaveBeenLastCalledWith('close','ticket',{
+        action:'resolve',operator:'Support',outcome:'submitted_verified',note:'Verified the close.',confirm:confirm === true,
+      });
+    }
+  });
+
+  it('lists ticket metadata and exposes the authenticated check', async () => {
+    vi.stubEnv('GUARDIAN_ADMIN_TOKEN',adminToken);
+    const ticket = {id:'ticket',kind:'close',user_id:'user',account:'account',market:'market',
+      submitted_at:'2026-01-01T00:00:00Z',age_seconds:61,legacy:true};
+    const list = vi.spyOn(MobileAuth.prototype,'listUncertainTickets').mockResolvedValue([ticket]);
+    const action = vi.spyOn(MobileAuth.prototype,'administerTicket').mockResolvedValue({status:'legacy',lookup:'legacy',result:null});
+    const response = await call(path,adminToken);
+    expect(response.status).toBe(200);
+    expect(response.headers.get('cache-control')).toBe('no-store');
+    expect(await response.json()).toEqual({tickets:[ticket]});
+    expect(list).toHaveBeenCalledOnce();
+    const checked = await call(path+'/check',adminToken,{ticketId:'ticket',kind:'close',operator:'Support'});
+    expect(checked.status).toBe(200);
+    expect(await checked.json()).toEqual({status:'legacy',lookup:'legacy',result:null});
+    expect(action).toHaveBeenCalledExactlyOnceWith('close','ticket',{action:'check',operator:'Support',note:''});
+  });
+});
 
 describe('public legal pages', () => {
   const supportLink = '<a href="https://x.com/FundedGuardian">DM us on X @FundedGuardian</a>';

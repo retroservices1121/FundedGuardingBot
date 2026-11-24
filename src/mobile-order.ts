@@ -17,12 +17,15 @@ export function orderRequestRejected(error: unknown) {
   return error instanceof MfpError && [400,401,403,404,422,429].includes(error.status);
 }
 
-export async function reconcileOrder(client: MfpClient, clientOrderId: string, accountId: string, submittedAgeSeconds?: number) {
-  const lookup = await client.findOrderByClientOrderId(clientOrderId,accountId);
+export function orderLookupResult(lookup: Awaited<ReturnType<MfpClient['findOrderByClientOrderId']>>, submittedAgeSeconds?: number) {
   if (lookup.status === 'found') return orderReceipt(lookup.order);
   if (lookup.status === 'absent' && submittedAgeSeconds !== undefined && submittedAgeSeconds >= 60) {
     return {status:'not_submitted'} as const;
   }
+}
+
+export async function reconcileOrder(client: MfpClient, clientOrderId: string, accountId: string, submittedAgeSeconds?: number) {
+  return orderLookupResult(await client.findOrderByClientOrderId(clientOrderId,accountId),submittedAgeSeconds);
 }
 
 export async function submitOrder(client: MfpClient, clientOrderId: string, accountId: string, send: () => Promise<Record<string, unknown>>) {

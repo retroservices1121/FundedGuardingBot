@@ -42,19 +42,28 @@ describe('native connection ownership', () => {
 describe('native ticket recovery', () => {
   const ticket = {id:'new-ticket',accountId:'account',marketId:'market',expiresAt:Date.now()+10_000};
 
-  function pendingMarket(kind: 'trade' | 'close', ageSeconds: number, active = false, environment = 'live', selectedAccount = ticket.accountId) {
+  function pendingMarket(kind: 'trade' | 'close', ageSeconds: number, active = false, environment = 'live', selectedAccount = ticket.accountId, format: 'current' | 'legacy' | 'old-claim' = 'current') {
     const table = kind === 'trade' ? 'mobile_trade_tickets' : 'mobile_close_tickets';
     const connection = {environment,encrypted_api_key:secrets.encrypt('test-key'),selected_account_id:selectedAccount};
     const pending = {id:'previous',identity_id:'previous-owner',kind};
+    const payload = format === 'legacy' ? ticket : {...ticket,environment:'live',...(format === 'old-claim' && {awaitingClaim:true})};
     let storedResult: string | undefined;
     const query = vi.fn(async (sql: string, args?: unknown[]) => {
       const result = (rows: unknown[]) => ({rows,rowCount:rows.length});
-      if (sql.includes('UNION ALL')) return result(storedResult ? [] : [pending]);
+      if (sql.includes('UNION ALL')) {
+        const branches = sql.split('UNION ALL');
+        for (const branch of branches) {
+          expect(branch).toContain("payload->>'environment' IN ('live','sandbox')");
+          expect(branch).toContain("NOT (payload ? 'awaitingClaim')");
+        }
+        return result(storedResult || format !== 'current' ? [] : [pending]);
+      }
       if (sql.includes('FOR UPDATE SKIP LOCKED')) {
         expect(sql).toContain(`FROM ${table}`);
         expect(sql).toContain('EXTRACT(EPOCH FROM clock_timestamp() - submitted_at)::double precision AS submitted_age_seconds');
-        expect(args).toEqual([pending.id,pending.identity_id]);
-        return result(active ? [] : [{payload:{...ticket,environment:'live'},submitted_age_seconds:ageSeconds}]);
+        expect(args?.[0]).toBe(pending.id);
+        expect(sql).toContain("payload->>'environment' IN ('live','sandbox')");
+        return result(active || format !== 'current' ? [] : [{payload,identity_id:pending.identity_id,submitted_age_seconds:ageSeconds}]);
       }
       if (sql.startsWith('SELECT environment')) {
         expect(args).toEqual([pending.identity_id]);
@@ -102,5 +111,25 @@ describe('native ticket recovery', () => {
     expect(lookup).toHaveBeenCalledExactlyOnceWith('guardian-native-previous',ticket.accountId);
     expect(account).toHaveBeenCalledExactlyOnceWith(ticket.accountId);
     expect(result()).toBeUndefined();
+  });
+
+  it.each(['trade','close'] as const)('ignores a legacy %s created after backfill in market locking and reconciliation', async kind => {
+    const {auth,lookup} = pendingMarket(kind,61,false,'live',ticket.accountId,'legacy');
+    await expect(auth.saveTicket('session',ticket as never)).resolves.toBe(true);
+    await expect(auth.reconcileTicket('session','previous',kind === 'close')).resolves.toBeUndefined();
+    expect(lookup).not.toHaveBeenCalled();
+  });
+
+  it('ignores a new quote claimed by an older server during overlap', async () => {
+    const {auth,lookup} = pendingMarket('close',61,false,'live',ticket.accountId,'old-claim');
+    await expect(auth.saveClose('session',ticket)).resolves.toBeUndefined();
+    expect(lookup).not.toHaveBeenCalled();
+  });
+
+  it.each(['trade','close'] as const)('keeps the market locked on an uncertain new-format %s', async kind => {
+    const {auth,lookup} = pendingMarket(kind,61);
+    lookup.mockResolvedValue({status:'failed'});
+    await expect(auth.saveTicket('session',ticket as never)).rejects.toThrow('still being checked');
+    expect(lookup).toHaveBeenCalledTimes(1);
   });
 });
