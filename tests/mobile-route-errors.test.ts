@@ -11,6 +11,7 @@ import { startMiniAppServer } from '../src/mini-app-server.js';
 import { MobileAuth } from '../src/mobile-auth.js';
 import { MobileWriteUncertainError } from '../src/mobile-errors.js';
 import { MobilePush } from '../src/mobile-push.js';
+import { MobileTrading } from '../src/mobile-trading.js';
 import type { Position, TradeTicket } from '../src/types.js';
 
 const config = loadConfig({
@@ -92,6 +93,64 @@ function telegramPost(path: string, data: unknown) {
     method:'POST',headers:{'Content-Type':'application/json',Authorization:`tma ${init}`},body:JSON.stringify(data),
   });
 }
+
+it('waits for migrations and drains an admitted write while refusing new ones', async () => {
+  let finishMigration!: () => void;
+  let finishWrite!: () => void;
+  let startWrite!: () => void;
+  const migration = new Promise<void>(resolve => { finishMigration = resolve; });
+  const write = new Promise<void>(resolve => { finishWrite = resolve; });
+  const writeStarted = new Promise<void>(resolve => { startWrite = resolve; });
+  const stopPush = vi.fn();
+  vi.spyOn(MobileAuth.prototype,'migrate').mockResolvedValue(undefined);
+  vi.spyOn(MobilePush.prototype,'migrate').mockReturnValue(migration);
+  vi.spyOn(MobilePush.prototype,'start').mockReturnValue(stopPush);
+  const quick = vi.spyOn(MobileTrading.prototype,'quick').mockImplementation(async () => {
+    startWrite();
+    await write;
+    return {dryRun:true,status:'validated'};
+  });
+  const drainingServer = startMiniAppServer({...config,PORT:0},{pool,...telegramDb} as unknown as Database);
+  try {
+    await once(drainingServer,'listening');
+    const address = drainingServer.address();
+    if (!address || typeof address === 'string') throw new Error('Expected a listening port.');
+    const url = `http://127.0.0.1:${address.port}`;
+    expect((await apiFetch(url+'/health')).status).toBe(503);
+    finishMigration();
+    const accepted = apiFetch(url+'/api/mobile/auth/trade/quick',{
+      method:'POST',headers:{Authorization:'Bearer test-session'},body:'{}',
+    });
+    await writeStarted;
+    expect((await apiFetch(url+'/health')).status).toBe(200);
+
+    let drained = false;
+    const drain = drainingServer.beginShutdown().then(() => { drained = true; });
+    expect(stopPush).toHaveBeenCalledOnce();
+    for (const [method,path] of [
+      ['POST','/api/mobile/auth/trade/quick'], ['POST','/api/mobile/auth/trade/confirm'],
+      ['POST','/api/mobile/auth/close/confirm'], ['POST','/api/mobile/auth/protection/confirm'],
+      ['POST','/api/trade/confirm'], ['POST','/api/positions/position/close'],
+      ['PUT','/api/positions/position/protection'], ['POST','/api/orders/order/cancel'],
+    ]) {
+      const response = await apiFetch(url+path,{method});
+      expect(response.status).toBe(503);
+      expect(await response.json()).toEqual({
+        error:'Funded Guardian is restarting, try again in a moment',uncertain:false,code:'restarting',
+      });
+    }
+    expect((await apiFetch(url+'/api/mobile/auth/trade/check',{method:'POST'})).status).toBe(401);
+    expect(quick).toHaveBeenCalledOnce();
+    expect(drained).toBe(false);
+    finishWrite();
+    expect((await accepted).status).toBe(200);
+    await drain;
+  } finally {
+    finishMigration();
+    finishWrite();
+    await new Promise<void>(resolve => drainingServer.close(() => resolve()));
+  }
+});
 
 describe('mobile admin ticket routes', () => {
   const path = '/api/admin/mobile/tickets';
@@ -242,7 +301,8 @@ describe('Telegram trading policy checks', () => {
   });
 
   it('checks bot quotes and confirms even with personal guardrails off', async () => {
-    const bot = createGuardianBot(config,telegramDb as unknown as Database);
+    let restarting = false;
+    const bot = createGuardianBot(config,telegramDb as unknown as Database,() => restarting);
     bot.botInfo = {
       id:1,is_bot:true,first_name:'Guardian',username:'guardianbot',can_join_groups:true,
       can_read_all_group_messages:false,supports_inline_queries:false,can_connect_to_business:false,
@@ -250,8 +310,10 @@ describe('Telegram trading policy checks', () => {
       can_manage_bots:false,supports_join_request_queries:false,
     };
     const reply = vi.fn();
+    const answer = vi.fn();
     bot.api.config.use(async (_previous,method,payload) => {
       if (method === 'sendMessage' && 'text' in payload) reply(payload.text);
+      if (method === 'answerCallbackQuery' && 'text' in payload) answer(payload.text);
       return {ok:true,result:true} as never;
     });
     const tap = (data:string) => bot.handleUpdate({
@@ -276,6 +338,12 @@ describe('Telegram trading policy checks', () => {
     expect(reply).toHaveBeenLastCalledWith(expect.stringContaining('Trading is paused while your payout is pending.'));
     expect(policy).toHaveBeenLastCalledWith(ticket.accountId);
     expect(send).not.toHaveBeenCalled();
+
+    restarting = true;
+    telegramDb.takeTicket.mockClear();
+    await tap('confirm:'+ticket.id);
+    expect(answer).toHaveBeenLastCalledWith('Funded Guardian is restarting, try again in a moment');
+    expect(telegramDb.takeTicket).not.toHaveBeenCalled();
   });
 });
 

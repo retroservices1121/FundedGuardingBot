@@ -5,6 +5,7 @@ import { SecretBox } from "./crypto.js";
 import { Database } from "./db.js";
 import { accountMessage, closedPositionsMessage, positionsMessage, ticketMessage, tradeKeyboard } from "./format.js";
 import { MfpClient, MfpError } from "./mfp.js";
+import { restartMessage } from "./restart-message.js";
 import { buildTicket, calculateSize, guardAccount, marketAllowsOpening, marketOrderProblem, tradingPolicyProblems } from "./risk.js";
 import { closedPositionCaption, createClosedPositionShareCard } from "./share-card.js";
 import type { Market, PositionView, Side } from "./types.js";
@@ -38,7 +39,7 @@ function appUrlForMarket(appUrl: string, market: string) {
   return url.toString();
 }
 
-export function createGuardianBot(config: Config, db: Database) {
+export function createGuardianBot(config: Config, db: Database, isShuttingDown = () => false) {
   const bot = new Bot(config.TELEGRAM_BOT_TOKEN);
   const secrets = new SecretBox(config.ENCRYPTION_KEY);
   const appUrl = miniAppUrl(config);
@@ -306,6 +307,7 @@ export function createGuardianBot(config: Config, db: Database) {
     await ctx.editMessageReplyMarkup({ reply_markup: undefined }).catch(() => undefined);
   });
   bot.callbackQuery(/^confirm:([a-f0-9-]+)$/, async (ctx) => {
+    if (isShuttingDown()) return void (await ctx.answerCallbackQuery({ text: restartMessage, show_alert: true }));
     const ticket = await db.takeTicket(ctx.match[1]!, ctx.from.id);
     if (!ticket) return void (await ctx.answerCallbackQuery({ text: "This quote expired or was already used.", show_alert: true }));
     const user = await ensureUser(ctx);

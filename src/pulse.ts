@@ -104,6 +104,7 @@ export function startPulseChannel(config: Config, db: Database, telegram: Api, b
   const snapshots = new Map<string, Snapshot>();
   let stopped = false;
   let reconnectDelay = 1_000;
+  let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
   let socket: WebSocket | undefined;
   let connected = false;
   let connectedAt = 0;
@@ -125,14 +126,18 @@ export function startPulseChannel(config: Config, db: Database, telegram: Api, b
   const cooldownBucket = () => Math.floor(Date.now() / (config.PULSE_ALERT_COOLDOWN_MINUTES * 60_000));
 
   async function publish(key: string, text: string, symbol?: string, sourceUrl?: string, sourceName?: string) {
-    await db.savePulseItem({id:key,kind:sourceUrl?'news':key.startsWith('brief:')?'brief':'market',title:text.split('\n')[0]??'Market alert',body:text,symbol,sourceUrl,sourceName});
-    if (!channelId || !await db.claimPulsePublication(key)) return;
+    if (stopped) return;
+    let claimed = false;
     try {
+      await db.savePulseItem({id:key,kind:sourceUrl?'news':key.startsWith('brief:')?'brief':'market',title:text.split('\n')[0]??'Market alert',body:text,symbol,sourceUrl,sourceName});
+      if (stopped || !channelId) return;
+      claimed = await db.claimPulsePublication(key);
+      if (!claimed) return;
       await telegram.sendMessage(channelId, text, { reply_markup: openButton(botUsername, symbol, sourceUrl, sourceName), link_preview_options: { is_disabled: true } });
       publishedAt = Date.now();
-    } catch (error) {
-      await db.releasePulsePublication(key);
-      console.error("Pulse publication failed:", error);
+    } catch {
+      if (claimed) await db.releasePulsePublication(key).catch(() => undefined);
+      if (!stopped) console.error("Pulse publication failed.");
     }
   }
 
@@ -253,7 +258,8 @@ export function startPulseChannel(config: Config, db: Database, telegram: Api, b
       if (stopped) return;
       const delay = reconnectDelay;
       reconnectDelay = Math.min(reconnectDelay * 2, 30_000);
-      setTimeout(connect, delay).unref();
+      reconnectTimer = setTimeout(connect, delay);
+      reconnectTimer.unref();
     });
   }
 
@@ -364,17 +370,22 @@ export function startPulseChannel(config: Config, db: Database, telegram: Api, b
     }
   }, 30_000);
   healthTimer.unref();
-  setTimeout(() => void publishBrief(), 15_000).unref();
+  const initialBrief = setTimeout(() => void publishBrief(), 15_000);
+  initialBrief.unref();
   const newsTimer = config.CRYPTOPANIC_TOKEN ? setInterval(() => void pollNews(), config.PULSE_NEWS_POLL_MINUTES * 60_000) : undefined;
   newsTimer?.unref();
-  if (config.CRYPTOPANIC_TOKEN) setTimeout(() => void pollNews(), 30_000).unref();
-  else console.log("Pulse news catalysts are disabled (CRYPTOPANIC_TOKEN is not set).");
+  const initialNews = config.CRYPTOPANIC_TOKEN ? setTimeout(() => void pollNews(), 30_000) : undefined;
+  initialNews?.unref();
+  if (!initialNews) console.log("Pulse news catalysts are disabled (CRYPTOPANIC_TOKEN is not set).");
 
   return { status, stop: () => {
     stopped = true;
     clearInterval(briefTimer);
     clearInterval(healthTimer);
     if (newsTimer) clearInterval(newsTimer);
+    clearTimeout(initialBrief);
+    clearTimeout(initialNews);
+    clearTimeout(reconnectTimer);
     socket?.close();
   } };
 }

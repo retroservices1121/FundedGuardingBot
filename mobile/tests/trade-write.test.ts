@@ -18,6 +18,14 @@ describe('trade write responses', () => {
     expect(tradeWriteResult(true,200,{dryRun:false,status:'pending'})).toEqual({dryRun:false,status:'pending'});
   });
 
+  it('unlocks a write explicitly refused during a restart', () => {
+    const error = 'Funded Guardian is restarting, try again in a moment';
+    expect(() => tradeWriteResult(false,503,{error,uncertain:false,code:'restarting'}))
+      .toThrow(new TradeWriteValidationError(error));
+    expect(() => tradeWriteResult(false,503,{error,uncertain:false}))
+      .toThrow(TradeWriteUncertainError);
+  });
+
   it('restores the original confirmation and only accepts status-check routes', () => {
     const saved = {path:'close/check',ticketId:'original-ticket',userId:'original-user'};
     expect(parseConfirmRetry(JSON.stringify(saved))).toEqual(saved);

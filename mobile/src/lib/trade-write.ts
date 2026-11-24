@@ -51,9 +51,10 @@ export class TradeWriteUncertainError extends Error {
 }
 
 export function tradeWriteResult(ok: boolean, status: number, body: unknown) {
-  const result = body as { uncertain?: unknown; error?: unknown; dryRun?: unknown; status?: unknown; warnings?: unknown } | null;
+  const result = body as { uncertain?: unknown; error?: unknown; code?: unknown; dryRun?: unknown; status?: unknown; warnings?: unknown } | null;
+  const restarting = status === 503 && result?.code === 'restarting';
   // Older servers could send a validation status for an order that may have gone through.
-  if (!ok && (status === 400 || status === 422) && result?.uncertain === false && typeof result.error === 'string' && result.error.trim()) {
+  if (!ok && (status === 400 || status === 422 || restarting) && result?.uncertain === false && typeof result.error === 'string' && result.error.trim()) {
     throw new TradeWriteValidationError(serverErrorMessage(result.error, 'The request was rejected. Review the details before trying again.'));
   }
   if (ok && result?.status === 'legacy' && result.error === undefined) {

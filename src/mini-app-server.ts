@@ -8,6 +8,7 @@ import { MobileTrading } from "./mobile-trading.js";
 import { MobileAuth } from "./mobile-auth.js";
 import { MobileSessionError, MobileValidationError, MobileWriteUncertainError } from "./mobile-errors.js";
 import { withinMobileWriteDeadline } from "./mobile-write-deadline.js";
+import { restartMessage } from "./restart-message.js";
 import { randomUUID } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { readFile } from "node:fs/promises";
@@ -117,6 +118,15 @@ function marketProvider(market: Market) {
   return String(market.provider ?? market.id.split("|")[0] ?? "binance");
 }
 
+function isTradingWrite(method: string | undefined, pathname: string) {
+  if (method === "PUT") return /^\/api\/positions\/[^/]+\/protection$/.test(pathname);
+  return method === "POST" && (
+    pathname === "/api/trade/confirm" ||
+    /^\/api\/(?:positions\/[^/]+\/close|orders\/[^/]+\/cancel)$/.test(pathname) ||
+    /^\/api\/mobile\/auth\/(?:trade\/(?:confirm|quick)|close\/confirm|protection\/confirm)$/.test(pathname)
+  );
+}
+
 export function startMiniAppServer(config: Config, db: Database) {
   const mobileAnalytics = new MobileAnalytics(db);
   const landingApi = createLandingApi(db);
@@ -125,7 +135,14 @@ export function startMiniAppServer(config: Config, db: Database) {
   const mobileActivity = new MobileActivity(mobileAuth, config);
   const mobileTrading = new MobileTrading(mobileAuth, config);
   const mobilePush=new MobilePush(db);
-  const mobileAuthReady = mobileAuth.migrate().then(async()=>{await mobilePush.migrate();mobilePush.start();});
+  let shuttingDown = false;
+  let ready = false;
+  let stopMobilePush: (() => void) | undefined;
+  const mobileAuthReady = mobileAuth.migrate().then(async () => {
+    await mobilePush.migrate();
+    ready = true;
+    if (!shuttingDown) stopMobilePush = mobilePush.start();
+  });
   mobileAuthReady.catch(() => console.error("Mobile authentication database setup failed."));
   const mobileRequestLimiter = new MobileRequestLimiter();
   const publicRoot = path.join(process.cwd(), "public", "miniapp");
@@ -600,8 +617,7 @@ export function startMiniAppServer(config: Config, db: Database) {
     "/app/styles-v24.css": { file: "styles.css", type: "text/css; charset=utf-8" },
   };
 
-  const server = createServer(async (request, response) => {
-    const url = new URL(request.url ?? "/", "http://localhost");
+  async function handleRequest(request: IncomingMessage, response: ServerResponse, url: URL) {
     try {
       const ticketsPath = "/api/admin/mobile/tickets";
       const ticketAction = /^\/api\/admin\/mobile\/tickets\/(check|resolve)$/.exec(url.pathname)?.[1];
@@ -816,7 +832,7 @@ export function startMiniAppServer(config: Config, db: Database) {
           return json(response, 503, { error: "Could not complete the request. Please try again." });
         }
       }
-      if (url.pathname === "/health") return json(response, 200, { ok: true });
+      if (url.pathname === "/health") return json(response, ready ? 200 : 503, { ok: ready });
       if (url.pathname.startsWith("/api/landing/")) return void await landingApi(request, response, url.pathname);
       const legalPage = /^\/(privacy|terms|support)(?:\.html)?$/.exec(url.pathname);
       const legalStylesheet = url.pathname === "/legal/legal.css";
@@ -862,10 +878,33 @@ export function startMiniAppServer(config: Config, db: Database) {
         && (message.includes("Telegram authentication") || message.includes("Open Funded"));
       json(response, needsTelegramAuth ? 401 : 400, { error: message });
     }
+  }
+
+  const activeRequests = new Set<Promise<void>>();
+  const server = createServer(async (request, response) => {
+    const url = new URL(request.url ?? "/", "http://localhost");
+    if (shuttingDown && isTradingWrite(request.method, url.pathname)) {
+      response.setHeader("Connection", "close");
+      return json(response, 503, { error: restartMessage, uncertain: false, code: "restarting" });
+    }
+    // Track the handler itself so a disconnected client cannot end the drain early.
+    const work = handleRequest(request, response, url);
+    activeRequests.add(work);
+    try {
+      await work;
+    } finally {
+      activeRequests.delete(work);
+    }
   });
 
   server.listen(config.PORT, "0.0.0.0", () => {
     console.log(`Funded Guardian Mini App listening on port ${config.PORT}.`);
   });
-  return server;
+  return Object.assign(server, {
+    beginShutdown() {
+      shuttingDown = true;
+      stopMobilePush?.();
+      return Promise.allSettled([mobileAuthReady, ...activeRequests]);
+    },
+  });
 }
