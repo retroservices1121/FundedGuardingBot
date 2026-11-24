@@ -63,7 +63,7 @@ describe('native ticket recovery', () => {
         expect(sql).toContain('EXTRACT(EPOCH FROM clock_timestamp() - submitted_at)::double precision AS submitted_age_seconds');
         expect(args?.[0]).toBe(pending.id);
         expect(sql).toContain("payload->>'environment' IN ('live','sandbox')");
-        return result(active || format !== 'current' ? [] : [{payload,identity_id:pending.identity_id,submitted_age_seconds:ageSeconds}]);
+        return result(active ? [] : [{payload,identity_id:pending.identity_id,submitted_age_seconds:ageSeconds,legacy:format !== 'current'}]);
       }
       if (sql.startsWith('SELECT environment')) {
         expect(args).toEqual([pending.identity_id]);
@@ -113,11 +113,12 @@ describe('native ticket recovery', () => {
     expect(result()).toBeUndefined();
   });
 
-  it.each(['trade','close'] as const)('ignores a legacy %s created after backfill in market locking and reconciliation', async kind => {
-    const {auth,lookup} = pendingMarket(kind,61,false,'live',ticket.accountId,'legacy');
+  it.each(['trade','close'] as const)('reports a legacy %s without locking the market or writing a result', async kind => {
+    const {auth,lookup,result} = pendingMarket(kind,61,false,'live',ticket.accountId,'legacy');
     await expect(auth.saveTicket('session',ticket as never)).resolves.toBe(true);
-    await expect(auth.reconcileTicket('session','previous',kind === 'close')).resolves.toBeUndefined();
+    await expect(auth.reconcileTicket('session','previous',kind === 'close')).resolves.toEqual({status:'legacy'});
     expect(lookup).not.toHaveBeenCalled();
+    expect(result()).toBeUndefined();
   });
 
   it('ignores a new quote claimed by an older server during overlap', async () => {

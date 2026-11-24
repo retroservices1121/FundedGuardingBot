@@ -35,11 +35,11 @@ const closeOrderOnly = "payload->>'kind' IS DISTINCT FROM 'protection'";
 const ticketAge = 'EXTRACT(EPOCH FROM clock_timestamp() - submitted_at)::double precision';
 type MobileTradeTicket = TradeTicket & {environment?: keyof typeof mobileOrderHosts};
 type PendingTicket = {
-  payload: TicketMarket & {environment: keyof typeof mobileOrderHosts};
+  payload: TicketMarket & {environment?: keyof typeof mobileOrderHosts};
   identity_id: string; submitted_age_seconds: number; legacy: boolean;
 };
 type TicketLookup = {
-  lookup: 'legacy' | 'failed' | 'found' | 'absent';
+  lookup: 'failed' | 'found' | 'absent';
   result?: ReturnType<typeof orderLookupResult>;
 };
 type CloseTicketInput = { id: string; expiresAt: number; accountId: string; [key: string]: unknown } &
@@ -255,27 +255,28 @@ export class MobileAuth {
   private async reconcilePendingTicket(client: PoolClient, table: TicketTable, id: string, identityId: string) {
     // An active sender holds this row lock until its write finishes.
     const kind = table === 'mobile_close_tickets' ? ` AND ${closeOrderOnly}` : '';
-    const {rows:[ticket]} = await client.query<PendingTicket>(`SELECT payload,identity_id,${ticketAge} AS submitted_age_seconds FROM ${table}
-      WHERE id=$1 AND identity_id=$2 AND submitted_at IS NOT NULL AND result IS NULL AND ${currentTicket}${kind} FOR UPDATE SKIP LOCKED`,[id,identityId]);
+    const {rows:[ticket]} = await client.query<PendingTicket>(`SELECT payload,identity_id,${ticketAge} AS submitted_age_seconds,NOT ${currentTicket} AS legacy FROM ${table}
+      WHERE id=$1 AND identity_id=$2 AND submitted_at IS NOT NULL AND result IS NULL${kind} FOR UPDATE SKIP LOCKED`,[id,identityId]);
     if (!ticket) return;
+    if (ticket.legacy) return {status:'legacy'} as const;
     const {result} = await this.lookupTicket(client,table,id,ticket);
     if (!result) return;
     await client.query(`UPDATE ${table} SET result=$2 WHERE id=$1 AND result IS NULL`,[id,JSON.stringify(result)]);
     return result;
   }
   private async lookupTicket(client: PoolClient, table: TicketTable, id: string, ticket: PendingTicket): Promise<TicketLookup> {
-    if (ticket.legacy) return {lookup:'legacy'} as const;
     if (!this.secrets) return {lookup:'failed'} as const;
-    const {rows:[connection]} = await client.query(`SELECT environment,encrypted_api_key,selected_account_id FROM mobile_connections WHERE identity_id=$1`,[ticket.identity_id]);
-    const host = mobileOrderHosts[ticket.payload.environment];
-    if (!host || connection?.environment !== ticket.payload.environment) return {lookup:'failed'} as const;
+    const {rows:[connection]} = await client.query<{environment: string; encrypted_api_key: string; selected_account_id: string}>(`SELECT environment,encrypted_api_key,selected_account_id FROM mobile_connections WHERE identity_id=$1`,[ticket.identity_id]);
+    const environment = ticket.payload.environment ?? (ticket.legacy ? connection?.environment : undefined);
+    if ((environment !== 'live' && environment !== 'sandbox') || connection?.environment !== environment) return {lookup:'failed'} as const;
     let apiKey: string;
     try { apiKey = this.secrets.decrypt(connection.encrypted_api_key); }
     catch { return {lookup:'failed'} as const; }
-    const mfp = new MfpClient(host,apiKey);
+    const mfp = new MfpClient(mobileOrderHosts[environment],apiKey);
     const clientOrderId = table === 'mobile_close_tickets' ? closeClientOrderId(id) : entryClientOrderId(id);
     const lookup = await mfp.findOrderByClientOrderId(clientOrderId,ticket.payload.accountId).catch(() => ({status:'failed'} as const));
-    const result = orderLookupResult(lookup,ticket.submitted_age_seconds);
+    // An empty lookup cannot verify an older instance's submission.
+    const result = orderLookupResult(lookup,ticket.legacy ? undefined : ticket.submitted_age_seconds);
     if (result?.status === 'not_submitted' && connection.selected_account_id !== ticket.payload.accountId) {
       const account = await mfp.getAccount(ticket.payload.accountId).catch(() => undefined);
       if (account?.id !== ticket.payload.accountId) return {lookup:'failed'} as const;
@@ -320,8 +321,9 @@ export class MobileAuth {
         let result: {status: string; dryRun?: boolean} | undefined;
         if (input.action === 'check') {
           result = checked.result;
-        } else if (lookup === 'found') {
-          status = 'found_use_check';
+          if (ticket.legacy && lookup === 'absent') status = 'legacy';
+        } else if (lookup === 'found' && (checked.result || input.outcome === 'not_submitted')) {
+          status = checked.result ? 'found_use_check' : 'found';
         } else if (ticket.submitted_age_seconds < 60) {
           status = 'too_recent';
         } else if (input.confirm) {

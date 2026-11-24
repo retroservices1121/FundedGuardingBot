@@ -120,13 +120,38 @@ describe('admin ticket actions', () => {
     expect(audit[0]?.slice(4)).toEqual([null,null,manual.note,'found','found_use_check','submitted_verified']);
   });
 
-  it('leaves a legacy close uncertain on check and permits a verified manual resolution', async () => {
+  it('requires a confirmed verified submission when the lookup finds an incomplete order', async () => {
+    const {auth,audit,request,result} = setup();
+    request.mockImplementation(async () => new Response(JSON.stringify([{id:'real-order'}])));
+    expect(await auth.administerTicket('close','ticket',check)).toEqual({status:'found',lookup:'found',result:null});
+    expect((await auth.administerTicket('close','ticket',{...manual,outcome:'not_submitted',confirm:true})).status).toBe('found');
+    expect((await auth.administerTicket('close','ticket',{...manual,confirm:false})).status).toBe('dry_run');
+    expect(result()).toBeNull();
+    expect(await auth.administerTicket('close','ticket',{...manual,confirm:true})).toEqual({
+      status:'resolved',lookup:'found',result:{status:'submitted_verified',dryRun:false},
+    });
+    expect(audit.slice(1).map(row=>row.slice(4))).toEqual([
+      [null,null,manual.note,'found','found','not_submitted'],
+      [null,null,manual.note,'found','dry_run','submitted_verified'],
+      [null,result(),manual.note,'found','resolved','submitted_verified'],
+    ]);
+  });
+
+  it('leaves a legacy close uncertain after an empty lookup and permits a verified manual resolution', async () => {
     const {auth,audit,request,result} = setup({legacy:true});
-    expect((await auth.administerTicket('close','ticket',check)).status).toBe('legacy');
+    expect(await auth.administerTicket('close','ticket',check)).toEqual({status:'legacy',lookup:'absent',result:null});
     expect(result()).toBeNull();
     expect((await auth.administerTicket('close','ticket',{...manual,outcome:'not_submitted',confirm:true})).status).toBe('resolved');
     expect(result()).toEqual({status:'not_submitted'});
-    expect(request).not.toHaveBeenCalled();
-    expect(audit.map(row=>row[7])).toEqual(['legacy','legacy']);
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(audit.map(row=>row[7])).toEqual(['absent','absent']);
+  });
+
+  it('records a complete receipt found for a legacy close', async () => {
+    const {auth,audit,request,result} = setup({legacy:true});
+    request.mockResolvedValueOnce(new Response(JSON.stringify([{id:'real-order',status:'filled'}])));
+    expect(await auth.administerTicket('close','ticket',check)).toEqual({status:'resolved',lookup:'found',result:receipt});
+    expect(result()).toEqual(receipt);
+    expect(audit[0]?.slice(4)).toEqual([null,receipt,null,'found','resolved',null]);
   });
 });

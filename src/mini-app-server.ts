@@ -132,16 +132,16 @@ export function startMiniAppServer(config: Config, db: Database) {
   const landingApi = createLandingApi(db);
   const secrets = new SecretBox(config.ENCRYPTION_KEY);
   const mobileAuth = new MobileAuth(db, secrets);
-  const mobileActivity = new MobileActivity(mobileAuth, config);
-  const mobileTrading = new MobileTrading(mobileAuth, config);
+  const shutdown = new AbortController();
+  const mobileActivity = new MobileActivity(mobileAuth, config, shutdown.signal);
+  const mobileTrading = new MobileTrading(mobileAuth, config, shutdown.signal);
   const mobilePush=new MobilePush(db);
-  let shuttingDown = false;
   let ready = false;
   let stopMobilePush: (() => void) | undefined;
   const mobileAuthReady = mobileAuth.migrate().then(async () => {
     await mobilePush.migrate();
     ready = true;
-    if (!shuttingDown) stopMobilePush = mobilePush.start();
+    if (!shutdown.signal.aborted) stopMobilePush = mobilePush.start();
   });
   mobileAuthReady.catch(() => console.error("Mobile authentication database setup failed."));
   const mobileRequestLimiter = new MobileRequestLimiter();
@@ -622,6 +622,7 @@ export function startMiniAppServer(config: Config, db: Database) {
       const ticketsPath = "/api/admin/mobile/tickets";
       const ticketAction = /^\/api\/admin\/mobile\/tickets\/(check|resolve)$/.exec(url.pathname)?.[1];
       if (url.pathname === ticketsPath || ticketAction) {
+        if (!mobileAnalytics.allowRequest(request, "tickets")) return json(response, 429, { error: "Try again shortly." });
         if (!adminAuthorized(request.headers.authorization)) return json(response, 401, { error: "Admin access required." });
         try {
           await mobileAuthReady;
@@ -648,6 +649,7 @@ export function startMiniAppServer(config: Config, db: Database) {
           }));
         } catch (error) {
           if (error instanceof MobileValidationError) return json(response, 400, { error: error.message });
+          console.error(`Mobile ticket admin ${ticketAction ?? "list"} failed.`);
           return json(response, 503, { error: "Could not complete the ticket request. Please refresh and check its status." });
         }
       }
@@ -657,7 +659,8 @@ export function startMiniAppServer(config: Config, db: Database) {
       }
       if (url.pathname === "/admin/mobile" || url.pathname === "/admin/mobile.js") {
         const isScript=url.pathname.endsWith(".js");
-        const content=await readFile(path.join(process.cwd(),"public","admin",isScript?"mobile.js":"mobile.html"));
+        const content=await readFile(path.join(process.cwd(),"public","admin",isScript?"mobile.js":"mobile.html")).catch(() => null);
+        if (!content) return json(response, 404, { error: "Not found." });
         response.writeHead(200,{"Content-Type":isScript?"text/javascript; charset=utf-8":"text/html; charset=utf-8","Cache-Control":"no-store","X-Robots-Tag":"noindex, nofollow","Content-Security-Policy":"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'","X-Content-Type-Options":"nosniff"});
         return void response.end(content);
       }
@@ -832,7 +835,10 @@ export function startMiniAppServer(config: Config, db: Database) {
           return json(response, 503, { error: "Could not complete the request. Please try again." });
         }
       }
-      if (url.pathname === "/health") return json(response, ready ? 200 : 503, { ok: ready });
+      if (url.pathname === "/health") {
+        const ok = ready && !shutdown.signal.aborted;
+        return json(response, ok ? 200 : 503, { ok });
+      }
       if (url.pathname.startsWith("/api/landing/")) return void await landingApi(request, response, url.pathname);
       const legalPage = /^\/(privacy|terms|support)(?:\.html)?$/.exec(url.pathname);
       const legalStylesheet = url.pathname === "/legal/legal.css";
@@ -841,7 +847,8 @@ export function startMiniAppServer(config: Config, db: Database) {
         const directory = legalPage || legalStylesheet ? "legal" : "landing";
         const file = legalPage ? `${legalPage[1]}.html` : legalStylesheet ? "legal.css" :
           url.pathname === "/" ? "index.html" : url.pathname.slice("/landing/".length);
-        const content = await readFile(path.join(process.cwd(), "public", directory, file));
+        const content = await readFile(path.join(process.cwd(), "public", directory, file)).catch(() => null);
+        if (!content) return json(response, 404, { error: "Not found." });
         response.writeHead(200, {
           "Content-Type": file.endsWith(".html") ? "text/html; charset=utf-8" :
             legalStylesheet ? "text/css; charset=utf-8" : file.endsWith(".js") ? "text/javascript; charset=utf-8" :
@@ -854,14 +861,16 @@ export function startMiniAppServer(config: Config, db: Database) {
         return void response.end(request.method === "HEAD" ? undefined : content);
       }
       if (url.pathname === "/app/logo.png") {
-        const logo = await readFile(path.join(process.cwd(), "assets", "funded-guardian-logo.png"));
+        const logo = await readFile(path.join(process.cwd(), "assets", "funded-guardian-logo.png")).catch(() => null);
+        if (!logo) return json(response, 404, { error: "Not found." });
         response.writeHead(200, { "Content-Type": "image/png", "Cache-Control": "public, max-age=86400" });
         return void response.end(logo);
       }
       if (url.pathname.startsWith("/api/")) return void await handleApi(request, response, url.pathname);
       const asset = staticFiles[url.pathname];
       if (asset) {
-        const content = await readFile(path.join(publicRoot, asset.file));
+        const content = await readFile(path.join(publicRoot, asset.file)).catch(() => null);
+        if (!content) return json(response, 404, { error: "Not found." });
         response.writeHead(200, {
           "Content-Type": asset.type,
           "Cache-Control": "no-store, max-age=0",
@@ -883,7 +892,7 @@ export function startMiniAppServer(config: Config, db: Database) {
   const activeRequests = new Set<Promise<void>>();
   const server = createServer(async (request, response) => {
     const url = new URL(request.url ?? "/", "http://localhost");
-    if (shuttingDown && isTradingWrite(request.method, url.pathname)) {
+    if (shutdown.signal.aborted && isTradingWrite(request.method, url.pathname)) {
       response.setHeader("Connection", "close");
       return json(response, 503, { error: restartMessage, uncertain: false, code: "restarting" });
     }
@@ -902,7 +911,7 @@ export function startMiniAppServer(config: Config, db: Database) {
   });
   return Object.assign(server, {
     beginShutdown() {
-      shuttingDown = true;
+      shutdown.abort(new MobileValidationError(restartMessage));
       stopMobilePush?.();
       return Promise.allSettled([mobileAuthReady, ...activeRequests]);
     },

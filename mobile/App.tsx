@@ -14,7 +14,7 @@ import { isTradeWrite, type ConfirmRetry } from './src/lib/trade-write';
 import { ScreenError, screenErrorMessage } from './src/lib/screen-error';
 import { createMobileRequest, serverUnavailableMessage, SessionError } from './src/lib/mobile-request';
 import { useTradeWriteLock } from './src/hooks/use-trade-write-lock';
-import { APP_PAGE_URLS, SUPPORT_CONTACT_LABEL, TRADING_DISCLAIMER } from './src/lib/app-information';
+import { APP_PAGE_URLS, TRADING_DISCLAIMER } from './src/lib/app-information';
 
 type User = { id: string; provider: string; email?: string };
 const key = 'guardian.native.session';
@@ -167,7 +167,7 @@ export default function App({ children }: { children: ReactNode }) {
       <View style={styles.legalLinks}>
         <Link href={APP_PAGE_URLS.privacy} style={styles.legalLink}>Privacy Policy</Link>
         <Link href={APP_PAGE_URLS.terms} style={styles.legalLink}>Terms of Use</Link>
-        <Link href={APP_PAGE_URLS.support} style={styles.legalLink}>{SUPPORT_CONTACT_LABEL}</Link>
+        <Link href={APP_PAGE_URLS.support} style={styles.legalLink}>Support</Link>
       </View>
     </View>
     </ScrollView>

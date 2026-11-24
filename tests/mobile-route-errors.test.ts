@@ -127,6 +127,9 @@ it('waits for migrations and drains an admitted write while refusing new ones', 
     let drained = false;
     const drain = drainingServer.beginShutdown().then(() => { drained = true; });
     expect(stopPush).toHaveBeenCalledOnce();
+    const health = await apiFetch(url+'/health');
+    expect(health.status).toBe(503);
+    expect(await health.json()).toEqual({ok:false});
     for (const [method,path] of [
       ['POST','/api/mobile/auth/trade/quick'], ['POST','/api/mobile/auth/trade/confirm'],
       ['POST','/api/mobile/auth/close/confirm'], ['POST','/api/mobile/auth/protection/confirm'],
@@ -148,6 +151,56 @@ it('waits for migrations and drains an admitted write while refusing new ones', 
   } finally {
     finishMigration();
     finishWrite();
+    await new Promise<void>(resolve => drainingServer.close(() => resolve()));
+  }
+});
+
+it.each([
+  ['trade',trade,'placeProtectedMarketOrder'],
+  ['close',{positionId:position.id,percent:100},'closePosition'],
+  ['protection',edit,'replacePositionExits'],
+] as const)('stops an admitted %s before sending when shutdown starts', async (kind,input,method) => {
+  vi.spyOn(MobileAuth.prototype,'migrate').mockResolvedValue(undefined);
+  vi.spyOn(MobilePush.prototype,'migrate').mockResolvedValue(undefined);
+  vi.spyOn(MobilePush.prototype,'start').mockReturnValue(() => {});
+  const log = vi.spyOn(console,'log').mockImplementation(() => {});
+  const drainingServer = startMiniAppServer({...config,PORT:0},{pool} as unknown as Database);
+  try {
+    await once(drainingServer,'listening');
+    log.mockRestore();
+    const address = drainingServer.address();
+    if (!address || typeof address === 'string') throw new Error('Expected a listening port.');
+    const sendRequest = (path: string,data: unknown) => apiFetch(
+      `http://127.0.0.1:${address.port}/api/mobile/auth/${kind}/${path}`,
+      {method:'POST',headers:{Authorization:'Bearer test-session'},body:JSON.stringify(data)},
+    );
+    let drain: ReturnType<typeof drainingServer.beginShutdown> | undefined;
+    vi.spyOn(MobileAuth.prototype,'saveTicket').mockResolvedValue(true);
+    vi.spyOn(MobileAuth.prototype,'saveClose').mockResolvedValue(undefined);
+    const quote = await sendRequest('quote',input);
+    expect(quote.status).toBe(200);
+    const {ticket} = await quote.json();
+    vi.spyOn(MobileAuth.prototype,'claimTicket').mockResolvedValue(ticket);
+    vi.spyOn(MobileAuth.prototype,'closeTicketResult').mockResolvedValue({payload:ticket});
+    vi.spyOn(MobileAuth.prototype,'claimClose').mockImplementation(async () => {
+      if (kind === 'protection') drain = drainingServer.beginShutdown();
+      return ticket;
+    });
+    vi.mocked(MobileAuth.prototype.withTicketWrite).mockImplementation((_id,_close,_environment,run) => {
+      drain = drainingServer.beginShutdown();
+      return run(pool as never);
+    });
+    const save = vi.spyOn(MobileAuth.prototype,kind === 'trade' ? 'saveTicketResult' : 'saveCloseResult').mockResolvedValue(undefined);
+    const send = vi.spyOn(MfpClient.prototype,method);
+    const response = await sendRequest('confirm',{ticketId:ticket.id});
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({
+      error:'Funded Guardian is restarting, try again in a moment',uncertain:false,
+    });
+    expect(save).toHaveBeenCalledExactlyOnceWith(ticket.id,{status:'not_submitted'});
+    expect(send).not.toHaveBeenCalled();
+    await drain;
+  } finally {
     await new Promise<void>(resolve => drainingServer.close(() => resolve()));
   }
 });
@@ -207,6 +260,32 @@ describe('mobile admin ticket routes', () => {
     expect(await checked.json()).toEqual({status:'legacy',lookup:'legacy',result:null});
     expect(action).toHaveBeenCalledExactlyOnceWith('close','ticket',{action:'check',operator:'Support',note:''});
   });
+
+  it('logs server failures without including error details', async () => {
+    vi.stubEnv('GUARDIAN_ADMIN_TOKEN',adminToken);
+    vi.spyOn(MobileAuth.prototype,'listUncertainTickets').mockRejectedValue(new Error('Database error details'));
+    const log = vi.spyOn(console,'error').mockImplementation(() => {});
+    const response = await call(path,adminToken);
+    expect(response.status).toBe(503);
+    expect(log).toHaveBeenCalledExactlyOnceWith('Mobile ticket admin list failed.');
+    expect(await response.text()).not.toContain('Database error details');
+  });
+
+  it('limits list, check and resolve to 120 requests per minute in total', async () => {
+    vi.stubEnv('GUARDIAN_ADMIN_TOKEN',adminToken);
+    vi.spyOn(Date,'now').mockReturnValue(Date.now()+60_001);
+    const list = vi.spyOn(MobileAuth.prototype,'listUncertainTickets').mockResolvedValue([]);
+    const action = vi.spyOn(MobileAuth.prototype,'administerTicket').mockResolvedValue({status:'missing',lookup:'skipped',result:null});
+    for (let i=0; i<119; i++) {
+      const response = await call(path,adminToken);
+      expect(response.status).toBe(200);
+      await response.json();
+    }
+    expect((await call(path+'/check',adminToken,resolution)).status).toBe(200);
+    expect((await call(path+'/resolve',adminToken,resolution)).status).toBe(429);
+    expect(list).toHaveBeenCalledTimes(119);
+    expect(action).toHaveBeenCalledOnce();
+  });
 });
 
 describe('public legal pages', () => {
@@ -259,7 +338,7 @@ describe('public legal pages', () => {
     expect(await response.text()).toContain('.notice{');
   });
 
-  it.each(['/unknown', '/legal/unknown.css', '/privacy/unknown'])('returns 404 for %s', async path => {
+  it.each(['/unknown', '/legal/unknown.css', '/privacy/unknown', '/landing/image-0000000000000000.png'])('returns a generic 404 for %s', async path => {
     const response = await apiFetch(new URL(path, base));
     expect(response.status).toBe(404);
     expect(await response.json()).toEqual({error:'Not found.'});

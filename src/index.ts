@@ -27,7 +27,7 @@ async function shutdown(exitCode = 0) {
     drainTimer = setTimeout(() => {
       timedOut = true;
       resolve();
-    }, 12_000);
+    }, 42_000);
   });
   await Promise.race([deadline, Promise.allSettled([requests, migration, stopPolling, polling])]);
 

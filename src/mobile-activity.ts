@@ -18,7 +18,7 @@ export function closeSize(size:number,percent:number,market?:Market){
   return value;
 }
 export class MobileActivity {
- constructor(private auth:MobileAuth,private config:Config){}
+ constructor(private auth:MobileAuth,private config:Config,private shutdownSignal?:AbortSignal){}
  private async session(token:string){
   const connection=await this.auth.connection(token);if(!connection)throw new MobileValidationError('Connect MyFundedPerps from Home first.');
   const client=new MfpClient(hosts[connection.environment as keyof typeof hosts],new SecretBox(this.config.ENCRYPTION_KEY).decrypt(connection.encrypted_api_key));
@@ -76,6 +76,7 @@ export class MobileActivity {
    return await this.auth.withTicketWrite(id,true,connection.environment,async locked=>{
     mobileWriteSignal()?.throwIfAborted();
     if(Date.now()>=ticket.expiresAt)throw new MobileValidationError('Close quote expired. Review again.');
+    this.shutdownSignal?.throwIfAborted();
     submitted=true;
     const result=await submitOrder(client,closeClientOrderId(ticket.id),ticket.accountId,()=>client.closePosition(position.id,ticket.size,quote.mid,ticket.id));
     await this.auth.saveCloseResult(id,result,locked);return result;
@@ -147,6 +148,7 @@ export class MobileActivity {
    if(Date.now()>=ticket.expiresAt)throw new MobileValidationError('Edit quote expired. Review again.');
    let result={dryRun:true,status:'validated'};
    if(!this.config.DRY_RUN){
+    this.shutdownSignal?.throwIfAborted();
     submitted=true;
     const response=await client.replacePositionExits(position,orders,ticket.takeProfitPrice,ticket.stopLossPrice,ticket.id);
     result={dryRun:false,status:String(response.status??'submitted')};

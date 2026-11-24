@@ -40,7 +40,7 @@ export function tradeInput(input: Record<string,unknown>) {
   return {marketId:input.marketId,side:input.side as Side,riskUsd,leverage,stopPercent,rewardRisk};
 }
 export class MobileTrading {
-  constructor(private auth:MobileAuth,private config:Config){}
+  constructor(private auth:MobileAuth,private config:Config,private shutdownSignal?:AbortSignal){}
   private async connection(token:string){
     const connection=await this.auth.connection(token);
     if(!connection)throw new MobileValidationError('Connect MyFundedPerps from Home first.');
@@ -133,6 +133,7 @@ export class MobileTrading {
       return await this.auth.withTicketWrite(id,false,connection.environment,async locked=>{
         mobileWriteSignal()?.throwIfAborted();
         if (Date.now() >= ticket.expiresAt) throw new MobileValidationError(quick?'Quote expired. Tap the saved amount again.':'Quote expired. Review a new quote.');
+        this.shutdownSignal?.throwIfAborted();
         submitted=true;
         const result=await submitOrder(client,clientOrderId,ticket.accountId,()=>client.placeProtectedMarketOrder({accountId:ticket.accountId,marketId:ticket.marketId,side:ticket.side,size:ticket.size,expectedPrice:ticket.expectedPrice,leverage:ticket.leverage,stopLossPrice:ticket.stopLossPrice,takeProfitPrice:ticket.takeProfitPrice,replaceOverlappingExits:replacement?true:undefined,clientOrderId,idempotencyKey:ticket.id}));
         await this.auth.saveTicketResult(id,result,locked);return result;

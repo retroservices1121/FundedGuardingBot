@@ -15,6 +15,14 @@ export class MobileAnalytics {
   private ready?: Promise<unknown>;
   private attempts = new Map<string, { until: number; count: number }>();
   constructor(private db: Database) {}
+  allowRequest(request: IncomingMessage, scope = 'analytics') {
+    const now=Date.now();
+    for(const [key,value] of this.attempts)if(value.until<=now)this.attempts.delete(key);
+    const key=`${scope}:${request.socket.remoteAddress??'unknown'}`;
+    const attempt=this.attempts.get(key)??{until:now+60000,count:0};
+    this.attempts.set(key,attempt);
+    return ++attempt.count<=120&&this.attempts.size<=1000;
+  }
   migrate() {
     return this.ready ??= this.db.pool.query(`CREATE TABLE IF NOT EXISTS mobile_installations (
       install_id TEXT PRIMARY KEY, platform TEXT NOT NULL CHECK(platform IN ('ios','android')),
@@ -58,9 +66,7 @@ export class MobileAnalytics {
   }
   async handle(request: IncomingMessage,response: ServerResponse,url: URL,readBody:(request:IncomingMessage)=>Promise<Record<string,unknown>>) {
     const json=(status:number,value:unknown)=>{response.writeHead(status,{'Content-Type':'application/json','Cache-Control':'no-store','X-Content-Type-Options':'nosniff'});response.end(JSON.stringify(value));};
-    const now=Date.now();for(const [key,value] of this.attempts)if(value.until<=now)this.attempts.delete(key);
-    const key=request.socket.remoteAddress??'unknown';const attempt=this.attempts.get(key)??{until:now+60000,count:0};this.attempts.set(key,attempt);
-    if(++attempt.count>120||this.attempts.size>1000)return json(429,{error:'Try again shortly.'});
+    if(!this.allowRequest(request))return json(429,{error:'Try again shortly.'});
     if(url.pathname==='/api/admin/mobile/stats'&&request.method==='GET'){
       if(!adminAuthorized(request.headers.authorization))return json(401,{error:'Admin access required.'});
       try{return json(200,await this.stats(url.searchParams.get('platform')??'all'));}catch{return json(503,{error:'Analytics are temporarily unavailable.'});}

@@ -60,8 +60,8 @@ async function withTicketRequest(run){
 const ticketMessages={
   absent:'MyFundedPerps returned no order yet. Check again after the request is at least one minute old.',
   failed:'Could not verify this request with MyFundedPerps. Check the account there before resolving it.',
-  found:'MyFundedPerps found the order but could not provide a complete result.',
-  legacy:'This older request cannot be checked here. Verify the outcome in MyFundedPerps.',
+  found:'MyFundedPerps found the order but could not provide a complete result. Verify it there before recording the submission.',
+  legacy:'Verify the outcome of this older request directly in MyFundedPerps.',
   busy:'This request is still being processed. Check again shortly.',
   missing:'This request is no longer available.',
   already_resolved:'This request already has a result.',
